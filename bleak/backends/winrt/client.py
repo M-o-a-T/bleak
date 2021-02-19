@@ -11,7 +11,11 @@ import uuid
 from functools import wraps
 from typing import Callable, Any, Union
 
-from winrt.windows.devices.enumeration import DevicePairingKinds, DevicePairingResultStatus, DeviceUnpairingResultStatus
+from winrt.windows.devices.enumeration import (
+    DevicePairingKinds,
+    DevicePairingResultStatus,
+    DeviceUnpairingResultStatus,
+)
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.winrt.scanner import BleakScannerWinRT
@@ -307,7 +311,9 @@ class BleakClientWinRT(BaseBleakClient):
             pairing_requested_token = custom_pairing.add_pairing_requested(handler)
             try:
                 if protection_level:
-                    pairing_result = await custom_pairing.pair_async(ceremony, protection_level)
+                    pairing_result = await custom_pairing.pair_async(
+                        ceremony, protection_level
+                    )
                 else:
                     pairing_result = await custom_pairing.pair_async(ceremony)
 
@@ -347,7 +353,9 @@ class BleakClientWinRT(BaseBleakClient):
         """
 
         if self._requester.device_information.pairing.is_paired:
-            unpairing_result = await self._requester.device_information.pairing.unpair_async()
+            unpairing_result = (
+                await self._requester.device_information.pairing.unpair_async()
+            )
 
             if unpairing_result.status not in (
                 DevicePairingResultStatus.PAIRED,
