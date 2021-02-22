@@ -3,7 +3,7 @@ import asyncio
 import inspect
 from typing import Callable, Dict, List, Optional, Tuple
 
-from bleak.backends.device import BLEDevice
+from .device import BLEDevice
 
 
 class AdvertisementData:

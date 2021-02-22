@@ -15,19 +15,19 @@ from CoreBluetooth import (
     CBCharacteristicWriteWithoutResponse,
 )
 
-from bleak.backends.client import BaseBleakClient
-from bleak.backends.corebluetooth.characteristic import (
+from ..client import BaseBleakClient
+from .characteristic import (
     BleakGATTCharacteristicCoreBluetooth,
 )
-from bleak.backends.corebluetooth.descriptor import BleakGATTDescriptorCoreBluetooth
-from bleak.backends.corebluetooth.scanner import BleakScannerCoreBluetooth
-from bleak.backends.corebluetooth.service import BleakGATTServiceCoreBluetooth
-from bleak.backends.corebluetooth.utils import cb_uuid_to_str
-from bleak.backends.device import BLEDevice
-from bleak.backends.service import BleakGATTServiceCollection
-from bleak.backends.characteristic import BleakGATTCharacteristic
+from .descriptor import BleakGATTDescriptorCoreBluetooth
+from .scanner import BleakScannerCoreBluetooth
+from .service import BleakGATTServiceCoreBluetooth
+from .utils import cb_uuid_to_str
+from ..device import BLEDevice
+from ..service import BleakGATTServiceCollection
+from ..characteristic import BleakGATTCharacteristic
 
-from bleak.exc import BleakError
+from ...exc import BleakError
 
 logger = logging.getLogger(__name__)
 

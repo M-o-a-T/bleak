@@ -14,16 +14,16 @@ from typing import Callable, Union
 
 from twisted.internet.error import ConnectionDone
 
-from bleak.backends.device import BLEDevice
-from bleak.backends.service import BleakGATTServiceCollection
-from bleak.exc import BleakError
-from bleak.backends.client import BaseBleakClient
-from bleak.backends.bluezdbus import defs, signals, utils, get_reactor
-from bleak.backends.bluezdbus.scanner import BleakScannerBlueZDBus
-from bleak.backends.bluezdbus.utils import get_managed_objects
-from bleak.backends.bluezdbus.service import BleakGATTServiceBlueZDBus
-from bleak.backends.bluezdbus.characteristic import BleakGATTCharacteristicBlueZDBus
-from bleak.backends.bluezdbus.descriptor import BleakGATTDescriptorBlueZDBus
+from ..device import BLEDevice
+from ..service import BleakGATTServiceCollection
+from ...exc import BleakError
+from ..client import BaseBleakClient
+from ..bluezdbus import defs, signals, utils, get_reactor
+from ..bluezdbus.scanner import BleakScannerBlueZDBus
+from ..bluezdbus.utils import get_managed_objects
+from ..bluezdbus.service import BleakGATTServiceBlueZDBus
+from ..bluezdbus.characteristic import BleakGATTCharacteristicBlueZDBus
+from ..bluezdbus.descriptor import BleakGATTDescriptorBlueZDBus
 
 from txdbus.client import connect as txdbus_connect
 from txdbus.error import RemoteError

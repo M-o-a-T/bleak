@@ -5,10 +5,10 @@ from typing import Any, Dict, List
 from Foundation import NSArray
 from CoreBluetooth import CBPeripheral
 
-from bleak.backends.corebluetooth.CentralManagerDelegate import CentralManagerDelegate
-from bleak.backends.corebluetooth.utils import cb_uuid_to_str
-from bleak.backends.device import BLEDevice
-from bleak.backends.scanner import BaseBleakScanner, AdvertisementData
+from .CentralManagerDelegate import CentralManagerDelegate
+from .utils import cb_uuid_to_str
+from ..device import BLEDevice
+from ..scanner import BaseBleakScanner, AdvertisementData
 
 logger = logging.getLogger(__name__)
 _here = pathlib.Path(__file__).parent

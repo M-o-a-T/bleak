@@ -10,8 +10,8 @@ import enum
 from uuid import UUID
 from typing import List, Union, Any
 
-from bleak.backends.descriptor import BleakGATTDescriptor
-from bleak.uuids import uuidstr_to_str
+from .descriptor import BleakGATTDescriptor
+from ..uuids import uuidstr_to_str
 
 
 class GattCharacteristicsFlags(enum.Enum):

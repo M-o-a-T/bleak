@@ -2,7 +2,7 @@
 
 import asyncio
 
-from bleak.backends.bluezdbus.defs import PROPERTIES_INTERFACE, OBJECT_MANAGER_INTERFACE
+from .defs import PROPERTIES_INTERFACE, OBJECT_MANAGER_INTERFACE
 
 
 def listen_properties_changed(bus, callback):
