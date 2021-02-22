@@ -34,9 +34,9 @@ from Foundation import (
 )
 from libdispatch import dispatch_queue_create, DISPATCH_QUEUE_SERIAL
 
-from bleak.backends.corebluetooth.PeripheralDelegate import PeripheralDelegate
-from bleak.backends.corebluetooth.device import BLEDeviceCoreBluetooth
-from bleak.exc import BleakError
+from .PeripheralDelegate import PeripheralDelegate
+from .device import BLEDeviceCoreBluetooth
+from ...exc import BleakError
 
 logger = logging.getLogger(__name__)
 CBCentralManagerDelegate = objc.protocolNamed("CBCentralManagerDelegate")

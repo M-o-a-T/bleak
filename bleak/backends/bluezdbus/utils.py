@@ -2,9 +2,9 @@
 import asyncio
 import re
 
-from bleak.uuids import uuidstr_to_str
+from ...uuids import uuidstr_to_str
 
-from bleak.backends.bluezdbus import defs
+from . import defs
 
 _mac_address_regex = re.compile("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
 

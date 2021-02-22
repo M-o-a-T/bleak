@@ -23,7 +23,13 @@ def test_import():
     if platform.system() == "Linux":
         from bleak import BleakClient
 
-        assert BleakClient.__name__ == "BleakClientBlueZDBus"
+        try:
+            import asyncdbus
+        except ImportError:
+            assert BleakClient.__name__ == "BleakClientBlueZDBus"
+        else:
+            assert BleakClient.__name__ == "BleakClient"
+            assert BleakClient.__package__ == "bleak.backend.asyncdbus.client"
     elif platform.system() == "Windows":
         from bleak import BleakClient
 

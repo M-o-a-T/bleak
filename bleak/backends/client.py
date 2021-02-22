@@ -9,9 +9,9 @@ import abc
 import uuid
 from typing import Callable, Union
 
-from bleak.backends.service import BleakGATTServiceCollection
-from bleak.backends.characteristic import BleakGATTCharacteristic
-from bleak.backends.device import BLEDevice
+from .service import BleakGATTServiceCollection
+from .characteristic import BleakGATTCharacteristic
+from .device import BLEDevice
 
 
 class BaseBleakClient(abc.ABC):

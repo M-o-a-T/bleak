@@ -1,12 +1,10 @@
-from bleak.backends.corebluetooth.utils import cb_uuid_to_str
+from .utils import cb_uuid_to_str
 from typing import List
 
 from Foundation import CBService
 
-from bleak.backends.corebluetooth.characteristic import (
-    BleakGATTCharacteristicCoreBluetooth,
-)
-from bleak.backends.service import BleakGATTService
+from .characteristic import BleakGATTCharacteristicCoreBluetooth
+from ..service import BleakGATTService
 
 
 class BleakGATTServiceCoreBluetooth(BleakGATTService):

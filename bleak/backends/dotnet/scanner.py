@@ -4,9 +4,9 @@ import pathlib
 from typing import List
 from uuid import UUID
 
-from bleak.backends.device import BLEDevice
-from bleak.backends.dotnet.utils import BleakDataReader
-from bleak.backends.scanner import BaseBleakScanner, AdvertisementData
+from ..device import BLEDevice
+from .utils import BleakDataReader
+from ..scanner import BaseBleakScanner, AdvertisementData
 
 # Import of BleakBridge to enable loading of winrt bindings
 from BleakBridge import Bridge  # noqa: F401

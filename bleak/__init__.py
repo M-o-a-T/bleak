@@ -13,8 +13,8 @@ import platform
 import subprocess
 import asyncio
 
-from bleak.__version__ import __version__  # noqa
-from bleak.exc import BleakError
+from .__version__ import __version__  # noqa
+from .exc import BleakError
 
 _on_rtd = os.environ.get("READTHEDOCS") == "True"
 
@@ -43,10 +43,10 @@ if platform.system() == "Linux":
                 "Bleak requires BlueZ >= 5.43. Found version {0} installed.".format(out)
             )
 
-    from bleak.backends.bluezdbus.scanner import (
+    from .backends.bluezdbus.scanner import (
         BleakScannerBlueZDBus as BleakScanner,
     )  # noqa: F401
-    from bleak.backends.bluezdbus.client import (
+    from .backends.bluezdbus.client import (
         BleakClientBlueZDBus as BleakClient,
     )  # noqa: F401
 elif platform.system() == "Darwin":
@@ -55,10 +55,10 @@ elif platform.system() == "Darwin":
     except Exception as ex:
         raise BleakError("Bleak requires the CoreBluetooth Framework") from ex
 
-    from bleak.backends.corebluetooth.scanner import (
+    from .backends.corebluetooth.scanner import (
         BleakScannerCoreBluetooth as BleakScanner,
     )  # noqa: F401
-    from bleak.backends.corebluetooth.client import (
+    from .backends.corebluetooth.client import (
         BleakClientCoreBluetooth as BleakClient,
     )  # noqa: F401
 
@@ -77,8 +77,8 @@ elif platform.system() == "Windows":
             "Requires at least Windows 10 version 0.16299 (Fall Creators Update)."
         )
 
-    from bleak.backends.dotnet.scanner import BleakScannerDotNet as BleakScanner  # noqa
-    from bleak.backends.dotnet.client import BleakClientDotNet as BleakClient  # noqa
+    from .backends.dotnet.scanner import BleakScannerDotNet as BleakScanner  # noqa
+    from .backends.dotnet.client import BleakClientDotNet as BleakClient  # noqa
 else:
     raise BleakError(f"Unsupported platform: {platform.system()}")
 
