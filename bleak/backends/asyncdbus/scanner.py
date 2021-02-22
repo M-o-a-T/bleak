@@ -136,14 +136,6 @@ class BleakScanner(BaseBleakScanner):
             body=[self._filters],
         )
 
-        # Start scanning
-        await self._callRemote(
-            self._adapter_path,
-            "StartDiscovery",
-            interface="org.bluez.Adapter1",
-            destination="org.bluez",
-        )
-
         # Add signal listeners
         await self._callRemote(
             '/org/freedesktop/DBus',
@@ -162,6 +154,15 @@ class BleakScanner(BaseBleakScanner):
             body=['interface=org.freedesktop.DBus.ObjectManager,member=InterfacesRemoved'],
             signature='s',
         )
+
+        # Start scanning
+        await self._callRemote(
+            self._adapter_path,
+            "StartDiscovery",
+            interface="org.bluez.Adapter1",
+            destination="org.bluez",
+        )
+
 
     async def _stop(self):
         await self._callRemote(
