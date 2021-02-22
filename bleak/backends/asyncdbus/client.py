@@ -11,6 +11,7 @@ import uuid
 import warnings
 from functools import wraps
 from typing import Callable, Union
+from contextlib import asynccontextmanager
 
 from twisted.internet.error import ConnectionDone
 
@@ -77,11 +78,8 @@ class BleakClient(BaseBleakClient):
 
     # Connectivity methods
 
-    async def connect(self, **kwargs) -> bool:
+    async def _connect(self) -> bool:
         """Connect to the specified GATT server.
-
-        Keyword Args:
-            timeout (float): Timeout for required ``BleakScanner.find_device_by_address`` call. Defaults to 10.0.
 
         Returns:
             Boolean representing connection status.
@@ -89,10 +87,9 @@ class BleakClient(BaseBleakClient):
         """
         # A Discover must have been run before connecting to any devices.
         # Find the desired device before trying to connect.
-        timeout = kwargs.get("timeout", self._timeout)
         if self._device_path is None:
             device = await BleakScanner.find_device_by_address(
-                self.address, timeout=timeout, adapter=self._adapter
+                self.address, adapter=self._adapter
             )
 
             if device:
@@ -168,7 +165,10 @@ class BleakClient(BaseBleakClient):
         self._rules["PropChanged"] = await signals.listen_properties_changed(
             self._bus, self._properties_changed_callback
         )
-        return True
+        try:
+            yield self
+        finally:
+            await self.disconnect()
 
     async def _cleanup_notifications(self) -> None:
         """
@@ -221,7 +221,7 @@ class BleakClient(BaseBleakClient):
         await self._cleanup_notifications()
         await self._cleanup_dbus_resources()
 
-    async def disconnect(self) -> bool:
+    async def _disconnect(self) -> bool:
         """Disconnect from the specified GATT server.
 
         Returns:
