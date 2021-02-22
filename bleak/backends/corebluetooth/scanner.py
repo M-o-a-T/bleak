@@ -32,7 +32,7 @@ class BleakScannerCoreBluetooth(BaseBleakScanner):
     """
 
     def __init__(self, **kwargs):
-        super(BleakScannerCoreBluetooth, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self._identifiers = None
         self._manager = CentralManagerDelegate.alloc().init()
         self._timeout = kwargs.get("timeout", 5.0)

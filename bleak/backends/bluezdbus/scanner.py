@@ -65,7 +65,7 @@ class BleakScannerBlueZDBus(BaseBleakScanner):
     """
 
     def __init__(self, **kwargs):
-        super(BleakScannerBlueZDBus, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
         # kwarg "device" is for backwards compatibility
         self._adapter = kwargs.get("adapter", kwargs.get("device", "hci0"))

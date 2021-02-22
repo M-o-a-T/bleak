@@ -55,7 +55,7 @@ class BaseBleakScanner(abc.ABC):
     """Interface for Bleak Bluetooth LE Scanners"""
 
     def __init__(self, *args, **kwargs):
-        super(BaseBleakScanner, self).__init__()
+        super().__init__()
         self._callback: Optional[AdvertisementDataCallback] = None
         self.register_detection_callback(kwargs.get("detection_callback"))
 

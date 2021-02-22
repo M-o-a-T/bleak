@@ -30,7 +30,7 @@ class BleakGATTCharacteristicBlueZDBus(BleakGATTCharacteristic):
     """GATT Characteristic implementation for the BlueZ DBus backend"""
 
     def __init__(self, obj: dict, object_path: str, service_uuid: str):
-        super(BleakGATTCharacteristicBlueZDBus, self).__init__(obj)
+        super().__init__(obj)
         self.__descriptors = []
         self.__path = object_path
         self.__service_uuid = service_uuid

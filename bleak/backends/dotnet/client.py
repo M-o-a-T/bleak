@@ -101,7 +101,7 @@ class BleakClientDotNet(BaseBleakClient):
     """
 
     def __init__(self, address_or_ble_device: Union[BLEDevice, str], **kwargs):
-        super(BleakClientDotNet, self).__init__(address_or_ble_device, **kwargs)
+        super().__init__(address_or_ble_device, **kwargs)
 
         # Backend specific. Python.NET objects.
         if isinstance(address_or_ble_device, BLEDevice):

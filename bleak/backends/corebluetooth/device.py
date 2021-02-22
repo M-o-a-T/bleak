@@ -33,7 +33,7 @@ class BLEDeviceCoreBluetooth(BLEDevice):
     """
 
     def __init__(self, *args, **kwargs):
-        super(BLEDeviceCoreBluetooth, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def _update(self, advertisementData: NSDictionary):
         self._update_uuids(advertisementData)
