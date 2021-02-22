@@ -1,7 +1,7 @@
-from ..descriptor import BleakGATTDescriptor
+from ..descriptor import BleakGATTDescriptor as BaseGATTDescriptor
 
 
-class BleakGATTDescriptorBlueZDBus(BleakGATTDescriptor):
+class BleakGATTDescriptor(BaseGATTDescriptor):
     """GATT Descriptor implementation for BlueZ DBus backend"""
 
     def __init__(

@@ -1,7 +1,7 @@
 from uuid import UUID
 from typing import Union, List
 
-from ..characteristic import BleakGATTCharacteristic
+from ..characteristic import BleakGATTCharacteristic as BaseGATTCharacteristic
 from ..descriptor import BleakGATTDescriptor
 
 
@@ -26,7 +26,7 @@ _GattCharacteristicsFlagsEnum = {
 }
 
 
-class BleakGATTCharacteristicBlueZDBus(BleakGATTCharacteristic):
+class BleakGATTCharacteristic(BaseGATTCharacteristic):
     """GATT Characteristic implementation for the BlueZ DBus backend"""
 
     def __init__(self, obj: dict, object_path: str, service_uuid: str):

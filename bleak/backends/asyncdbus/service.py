@@ -1,10 +1,10 @@
 from typing import List
 
-from ..service import BleakGATTService
-from .characteristic import BleakGATTCharacteristicBlueZDBus
+from ..service import BleakGATTService as baseGATTService
+from .characteristic import BleakGATTCharacteristic
 
 
-class BleakGATTServiceBlueZDBus(BleakGATTService):
+class BleakGATTService(BaseGATTService):
     """GATT Service implementation for the BlueZ DBus backend"""
 
     def __init__(self, obj, path):
@@ -18,12 +18,12 @@ class BleakGATTServiceBlueZDBus(BleakGATTService):
         return self.obj["UUID"]
 
     @property
-    def characteristics(self) -> List[BleakGATTCharacteristicBlueZDBus]:
+    def characteristics(self) -> List[BleakGATTCharacteristic]:
         """List of characteristics for this service"""
         return self.__characteristics
 
-    def add_characteristic(self, characteristic: BleakGATTCharacteristicBlueZDBus):
-        """Add a :py:class:`~BleakGATTCharacteristicBlueZDBus` to the service.
+    def add_characteristic(self, characteristic: BleakGATTCharacteristic):
+        """Add a :py:class:`~BleakGATTCharacteristic` to the service.
 
         Should not be used by end user, but rather by `bleak` itself.
         """

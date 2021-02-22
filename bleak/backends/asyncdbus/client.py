@@ -19,11 +19,11 @@ from ..service import BleakGATTServiceCollection
 from ...exc import BleakError
 from ..client import BaseBleakClient
 from ..bluezdbus import defs, signals, utils, get_reactor
-from .scanner import BleakScannerBlueZDBus
+from .scanner import BleakScanner
 from .utils import get_managed_objects
-from .service import BleakGATTServiceBlueZDBus
-from .characteristic import BleakGATTCharacteristicBlueZDBus
-from .descriptor import BleakGATTDescriptorBlueZDBus
+from .service import BleakGATTService
+from .characteristic import BleakGATTCharacteristic
+from .descriptor import BleakGATTDescriptor
 
 ## from txdbus.client import connect as txdbus_connect
 ## from txdbus.error import RemoteError
@@ -32,7 +32,7 @@ from .descriptor import BleakGATTDescriptorBlueZDBus
 logger = logging.getLogger(__name__)
 
 
-class BleakClientBlueZDBus(BaseBleakClient):
+class BleakClient(BaseBleakClient):
     """A native Linux Bleak Client
 
     Implemented by using the `BlueZ DBUS API <https://docs.ubuntu.com/core/en/stacks/bluetooth/bluez/docs/reference/dbus-api>`_.
@@ -91,7 +91,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
         # Find the desired device before trying to connect.
         timeout = kwargs.get("timeout", self._timeout)
         if self._device_path is None:
-            device = await BleakScannerBlueZDBus.find_device_by_address(
+            device = await BleakScanner.find_device_by_address(
                 self.address, timeout=timeout, adapter=self._adapter
             )
 
@@ -404,7 +404,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
             if defs.GATT_SERVICE_INTERFACE in interfaces:
                 service = interfaces.get(defs.GATT_SERVICE_INTERFACE)
                 self.services.add_service(
-                    BleakGATTServiceBlueZDBus(service, object_path)
+                    BleakGATTService(service, object_path)
                 )
             elif defs.GATT_CHARACTERISTIC_INTERFACE in interfaces:
                 char = interfaces.get(defs.GATT_CHARACTERISTIC_INTERFACE)
@@ -416,7 +416,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
         for char, object_path in _chars:
             _service = list(filter(lambda x: x.path == char["Service"], self.services))
             self.services.add_characteristic(
-                BleakGATTCharacteristicBlueZDBus(char, object_path, _service[0].uuid)
+                BleakGATTCharacteristic(char, object_path, _service[0].uuid)
             )
 
             # D-Bus object path contains handle as last 4 characters of 'charYYYY'
@@ -430,7 +430,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
                 )
             )
             self.services.add_descriptor(
-                BleakGATTDescriptorBlueZDBus(
+                BleakGATTDescriptor(
                     desc,
                     object_path,
                     _characteristic[0].uuid,
@@ -445,21 +445,21 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
     async def read_gatt_char(
         self,
-        char_specifier: Union[BleakGATTCharacteristicBlueZDBus, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
         **kwargs
     ) -> bytearray:
         """Perform read operation on the specified GATT characteristic.
 
         Args:
-            char_specifier (BleakGATTCharacteristicBlueZDBus, int, str or UUID): The characteristic to read from,
+            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to read from,
                 specified by either integer handle, UUID or directly by the
-                BleakGATTCharacteristicBlueZDBus object representing it.
+                BleakGATTCharacteristicobject representing it.
 
         Returns:
             (bytearray) The read data.
 
         """
-        if not isinstance(char_specifier, BleakGATTCharacteristicBlueZDBus):
+        if not isinstance(char_specifier, BleakGATTCharacteristic):
             characteristic = self.services.get_characteristic(char_specifier)
         else:
             characteristic = char_specifier
@@ -554,7 +554,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
     async def write_gatt_char(
         self,
-        char_specifier: Union[BleakGATTCharacteristicBlueZDBus, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
         data: bytearray,
         response: bool = False,
     ) -> None:
@@ -572,14 +572,14 @@ class BleakClientBlueZDBus(BaseBleakClient):
             of Bluez, it is not possible to "Write without response".
 
         Args:
-            char_specifier (BleakGATTCharacteristicBlueZDBus, int, str or UUID): The characteristic to write
+            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to write
                 to, specified by either integer handle, UUID or directly by the
-                BleakGATTCharacteristicBlueZDBus object representing it.
+                BleakGATTCharacteristic object representing it.
             data (bytes or bytearray): The data to send.
             response (bool): If write-with-response operation should be done. Defaults to `False`.
 
         """
-        if not isinstance(char_specifier, BleakGATTCharacteristicBlueZDBus):
+        if not isinstance(char_specifier, BleakGATTCharacteristic):
             characteristic = self.services.get_characteristic(char_specifier)
         else:
             characteristic = char_specifier
@@ -671,7 +671,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
     async def start_notify(
         self,
-        char_specifier: Union[BleakGATTCharacteristicBlueZDBus, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
         callback: Callable[[int, bytearray], None],
         **kwargs
     ) -> None:
@@ -687,9 +687,9 @@ class BleakClientBlueZDBus(BaseBleakClient):
             client.start_notify(char_uuid, callback)
 
         Args:
-            char_specifier (BleakGATTCharacteristicBlueZDBus, int, str or UUID): The characteristic to activate
+            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to activate
                 notifications/indications on a characteristic, specified by either integer handle,
-                UUID or directly by the BleakGATTCharacteristicBlueZDBus object representing it.
+                UUID or directly by the BleakGATTCharacteristic object representing it.
             callback (function): The function to be called on notification.
 
         Keyword Args:
@@ -698,7 +698,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
         """
         _wrap = kwargs.get("notification_wrapper", True)
-        if not isinstance(char_specifier, BleakGATTCharacteristicBlueZDBus):
+        if not isinstance(char_specifier, BleakGATTCharacteristic):
             characteristic = self.services.get_characteristic(char_specifier)
         else:
             characteristic = char_specifier
@@ -751,17 +751,17 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
     async def stop_notify(
         self,
-        char_specifier: Union[BleakGATTCharacteristicBlueZDBus, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
     ) -> None:
         """Deactivate notification/indication on a specified characteristic.
 
         Args:
-            char_specifier (BleakGATTCharacteristicBlueZDBus, int, str or UUID): The characteristic to deactivate
+            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to deactivate
                 notification/indication on, specified by either integer handle, UUID or
-                directly by the BleakGATTCharacteristicBlueZDBus object representing it.
+                directly by the BleakGATTCharacteristic object representing it.
 
         """
-        if not isinstance(char_specifier, BleakGATTCharacteristicBlueZDBus):
+        if not isinstance(char_specifier, BleakGATTCharacteristic):
             characteristic = self.services.get_characteristic(char_specifier)
         else:
             characteristic = char_specifier
@@ -785,7 +785,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
     async def get_all_for_characteristic(
         self,
-        char_specifier: Union[BleakGATTCharacteristicBlueZDBus, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
     ) -> dict:
         """Get all properties for a characteristic.
 
@@ -793,14 +793,14 @@ class BleakClientBlueZDBus(BaseBleakClient):
 
         Args:
             char_specifier: The characteristic to get properties for, specified by either
-                integer handle, UUID or directly by the BleakGATTCharacteristicBlueZDBus
+                integer handle, UUID or directly by the BleakGATTCharacteristic
                 object representing it.
 
         Returns:
             (dict) Properties dictionary
 
         """
-        if not isinstance(char_specifier, BleakGATTCharacteristicBlueZDBus):
+        if not isinstance(char_specifier, BleakGATTCharacteristic):
             characteristic = self.services.get_characteristic(char_specifier)
         else:
             characteristic = char_specifier
