@@ -3,12 +3,18 @@
 Linux backend
 =============
 
-The Linux backend of Bleak is written using the
+There are two Linux backends for Bleak.
+
+Its original Linux backend is written using the
 `TxDBus <https://github.com/cocagne/txdbus>`_
 package. It is written for
 `Twisted <https://twistedmatrix.com/trac/>`_, but by using the
 `twisted.internet.asyncioreactor <https://twistedmatrix.com/documents/current/api/twisted.internet.asyncioreactor.html>`_
 one can use it with `asyncio`.
+
+A newer, experimental backend is based on
+`asyncdbus <https://github.com/M-o-a-T/asyncdbus>`_,
+which works with both `asyncio` and `trio`.
 
 
 Special handling for ``write_gatt_char``
