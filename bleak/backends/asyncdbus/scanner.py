@@ -7,7 +7,7 @@ from ..scanner import BaseBleakScanner, AdvertisementData
 from ..device import BLEDevice
 from . import defs, get_reactor
 from .utils import validate_mac_address
-from txdbus import client
+## from txdbus import client
 
 logger = logging.getLogger(__name__)
 _here = pathlib.Path(__file__).parent
@@ -51,7 +51,7 @@ def _device_info(path, props):
         return None, None, None, None
 
 
-class BleakScannerBlueZDBus(BaseBleakScanner):
+class BleakScanner(BaseBleakScanner):
     """The native Linux Bleak BLE Scanner.
 
     For possible values for `filters`, see the parameters to the

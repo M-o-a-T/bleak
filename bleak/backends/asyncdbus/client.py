@@ -19,14 +19,14 @@ from ..service import BleakGATTServiceCollection
 from ...exc import BleakError
 from ..client import BaseBleakClient
 from ..bluezdbus import defs, signals, utils, get_reactor
-from ..bluezdbus.scanner import BleakScannerBlueZDBus
-from ..bluezdbus.utils import get_managed_objects
-from ..bluezdbus.service import BleakGATTServiceBlueZDBus
-from ..bluezdbus.characteristic import BleakGATTCharacteristicBlueZDBus
-from ..bluezdbus.descriptor import BleakGATTDescriptorBlueZDBus
+from .scanner import BleakScannerBlueZDBus
+from .utils import get_managed_objects
+from .service import BleakGATTServiceBlueZDBus
+from .characteristic import BleakGATTCharacteristicBlueZDBus
+from .descriptor import BleakGATTDescriptorBlueZDBus
 
-from txdbus.client import connect as txdbus_connect
-from txdbus.error import RemoteError
+## from txdbus.client import connect as txdbus_connect
+## from txdbus.error import RemoteError
 
 
 logger = logging.getLogger(__name__)
