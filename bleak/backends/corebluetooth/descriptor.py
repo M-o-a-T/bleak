@@ -16,7 +16,7 @@ class BleakGATTDescriptorCoreBluetooth(BleakGATTDescriptor):
     def __init__(
         self, obj: CBDescriptor, characteristic_uuid: str, characteristic_handle: int
     ):
-        super(BleakGATTDescriptorCoreBluetooth, self).__init__(obj)
+        super().__init__(obj)
         self.obj = obj
         self.__characteristic_uuid = characteristic_uuid
         self.__characteristic_handle = characteristic_handle

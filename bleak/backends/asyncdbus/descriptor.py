@@ -11,7 +11,7 @@ class BleakGATTDescriptorBlueZDBus(BleakGATTDescriptor):
         characteristic_uuid: str,
         characteristic_handle: int,
     ):
-        super(BleakGATTDescriptorBlueZDBus, self).__init__(obj)
+        super().__init__(obj)
         self.__path = object_path
         self.__characteristic_uuid = characteristic_uuid
         self.__characteristic_handle = characteristic_handle

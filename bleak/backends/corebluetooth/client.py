@@ -44,7 +44,7 @@ class BleakClientCoreBluetooth(BaseBleakClient):
     """
 
     def __init__(self, address_or_ble_device: Union[BLEDevice, str], **kwargs):
-        super(BleakClientCoreBluetooth, self).__init__(address_or_ble_device, **kwargs)
+        super().__init__(address_or_ble_device, **kwargs)
 
         if isinstance(address_or_ble_device, BLEDevice):
             self._device_info = address_or_ble_device.details

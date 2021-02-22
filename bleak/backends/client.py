@@ -50,7 +50,7 @@ class BaseBleakClient(abc.ABC):
         return "<{0}, {1}, {2}>".format(
             self.__class__.__name__,
             self.address,
-            super(BaseBleakClient, self).__repr__(),
+            super().__repr__(),
         )
 
     # Async Context managers
