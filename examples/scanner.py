@@ -13,6 +13,8 @@ import platform
 
 from bleak import BleakScanner
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 address = (
     "24:71:89:cc:09:05"  # <--- Change to your device's address here if you are using Windows or Linux

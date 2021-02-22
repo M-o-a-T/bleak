@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-import asyncio
 import re
+from asyncdbus import Message
 
 from ...uuids import uuidstr_to_str
-
 from . import defs
 
 _mac_address_regex = re.compile("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
@@ -14,12 +13,12 @@ def validate_mac_address(address):
 
 
 async def get_managed_objects(bus, object_path_filter=None):
-    objects = await bus.callRemote(
-        "/",
-        "GetManagedObjects",
-        interface="org.freedesktop.DBus.ObjectManager",
-        destination="org.bluez",
-    ).asFuture(asyncio.get_event_loop())
+    objects = (await bus.call(Message(
+            path="/",
+            method="GetManagedObjects",
+            interface="org.freedesktop.DBus.ObjectManager",
+            destination="org.bluez",
+        ))).body
     if object_path_filter:
         return dict(
             filter(lambda i: i[0].startswith(object_path_filter), objects.items())

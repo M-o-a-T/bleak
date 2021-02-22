@@ -76,6 +76,9 @@ or separately, calling ``start`` and ``stop`` methods on the scanner manually:
     loop = asyncio.get_event_loop()
     loop.run_until_complete(run())
 
+Note::
+    This method does not work with the asyncdbus-based backend.
+
 In the manual mode, it is possible to add an own callback that you want to call upon each
 scanner detection, as can be seen above. There are also possibilities of adding scanning filters,
 which differ widely between OS backend implementations, so the instructions merit careful reading.

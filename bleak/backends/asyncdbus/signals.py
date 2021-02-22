@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import asyncio
-
 from .defs import PROPERTIES_INTERFACE, OBJECT_MANAGER_INTERFACE
 
 
@@ -21,7 +19,7 @@ def listen_properties_changed(bus, callback):
         interface=PROPERTIES_INTERFACE,
         member="PropertiesChanged",
         path_namespace="/org/bluez",
-    ).asFuture(asyncio.get_event_loop())
+    )
 
 
 def listen_interfaces_added(bus, callback):
@@ -40,7 +38,7 @@ def listen_interfaces_added(bus, callback):
         interface=OBJECT_MANAGER_INTERFACE,
         member="InterfacesAdded",
         path_namespace="/org/bluez",
-    ).asFuture(asyncio.get_event_loop())
+    )
 
 
 def listen_interfaces_removed(bus, callback):
@@ -59,4 +57,4 @@ def listen_interfaces_removed(bus, callback):
         interface=OBJECT_MANAGER_INTERFACE,
         member="InterfacesRemoved",
         path_namespace="/org/bluez",
-    ).asFuture(asyncio.get_event_loop())
+    )

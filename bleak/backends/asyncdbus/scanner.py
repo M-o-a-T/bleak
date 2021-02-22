@@ -1,20 +1,22 @@
 import logging
-import asyncio
 import pathlib
 from typing import List
+from contextlib import asynccontextmanager
+from pprint import pformat
 
 from ..scanner import BaseBleakScanner, AdvertisementData
 from ..device import BLEDevice
-from . import defs, get_reactor
+from . import defs
 from .utils import validate_mac_address
-## from txdbus import client
+
+from asyncdbus import MessageBus, BusType, Message
+from asyncdbus.signature import Variant,Str
 
 logger = logging.getLogger(__name__)
-_here = pathlib.Path(__file__).parent
 
 
 def _filter_on_adapter(objs, pattern="hci0"):
-    for path, interfaces in objs.items():
+    for path, interfaces in objs[0].items():
         adapter = interfaces.get("org.bluez.Adapter1")
         if adapter is None:
             continue
@@ -26,7 +28,7 @@ def _filter_on_adapter(objs, pattern="hci0"):
 
 
 def _filter_on_device(objs):
-    for path, interfaces in objs.items():
+    for path, interfaces in objs[0].items():
         device = interfaces.get("org.bluez.Device1")
         if device is None:
             continue
@@ -63,6 +65,7 @@ class BleakScanner(BaseBleakScanner):
         filters (dict): A dict of filters to be applied on discovery.
 
     """
+    _ctx_ = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -79,87 +82,98 @@ class BleakScanner(BaseBleakScanner):
         # Discovery filters
         self._filters = kwargs.get("filters", {})
         if "Transport" not in self._filters:
-            self._filters["Transport"] = "le"
+            self._filters["Transport"] = Variant(Str, "le")
 
         self._adapter_path = None
         self._interface = None
 
     async def start(self):
-        loop = asyncio.get_event_loop()
-        self._reactor = get_reactor(loop)
-        self._bus = await client.connect(self._reactor, "system").asFuture(loop)
+        raise RuntimeError("You need to use a context manager")
 
+    async def stop(self):
+        raise RuntimeError("You need to use a context manager")
+
+    async def __aenter__(self):
+        if self._ctx_ is not None:
+            raise RuntimeError("A ScopeSet can only be used once")
+        self._ctx_ = self._ctx()
+        return await self._ctx_.__aenter__()
+
+    async def __aexit__(self, *tb):
+        ctx, self._ctx_ = self._ctx_, None
+        return await ctx.__aexit__(*tb)  # pylint:disable=no-member  # YES IT HAS
+
+    @asynccontextmanager
+    async def _ctx(self):
+        async with MessageBus(bus_type=BusType.SYSTEM).connect() as self._bus:
+            await self._start()
+            try:
+                yield self
+            finally:
+                await self._stop()
+
+    async def _start(self):
         # Add signal listeners
-        self._rules.append(
-            await self._bus.addMatch(
-                self.parse_msg,
-                interface="org.freedesktop.DBus.ObjectManager",
-                member="InterfacesAdded",
-            ).asFuture(loop)
-        )
-
-        self._rules.append(
-            await self._bus.addMatch(
-                self.parse_msg,
-                interface="org.freedesktop.DBus.ObjectManager",
-                member="InterfacesRemoved",
-            ).asFuture(loop)
-        )
-
-        self._rules.append(
-            await self._bus.addMatch(
-                self.parse_msg,
-                interface="org.freedesktop.DBus.Properties",
-                member="PropertiesChanged",
-            ).asFuture(loop)
-        )
+        self._bus.add_message_handler(self.parse_msg)
 
         # Find the HCI device to use for scanning and get cached device properties
-        objects = await self._bus.callRemote(
+        objects = await self._callRemote(
             "/",
             "GetManagedObjects",
             interface=defs.OBJECT_MANAGER_INTERFACE,
             destination=defs.BLUEZ_SERVICE,
-        ).asFuture(loop)
+        )
         self._adapter_path, self._interface = _filter_on_adapter(objects, self._adapter)
         self._cached_devices = dict(_filter_on_device(objects))
 
         # Apply the filters
-        await self._bus.callRemote(
+        await self._callRemote(
             self._adapter_path,
             "SetDiscoveryFilter",
             interface="org.bluez.Adapter1",
             destination="org.bluez",
             signature="a{sv}",
             body=[self._filters],
-        ).asFuture(loop)
+        )
 
         # Start scanning
-        await self._bus.callRemote(
+        await self._callRemote(
             self._adapter_path,
             "StartDiscovery",
             interface="org.bluez.Adapter1",
             destination="org.bluez",
-        ).asFuture(loop)
+        )
 
-    async def stop(self):
-        loop = asyncio.get_event_loop()
-        await self._bus.callRemote(
+        # Add signal listeners
+        await self._callRemote(
+            '/org/freedesktop/DBus',
+            'AddMatch',
+            interface='org.freedesktop.DBus',
+            destination='org.freedesktop.DBus',
+            body=['interface=org.freedesktop.DBus.ObjectManager,member=InterfacesAdded'],
+            signature='s',
+        )
+
+        await self._callRemote(
+            '/org/freedesktop/DBus',
+            'AddMatch',
+            interface='org.freedesktop.DBus',
+            destination='org.freedesktop.DBus',
+            body=['interface=org.freedesktop.DBus.ObjectManager,member=InterfacesRemoved'],
+            signature='s',
+        )
+
+    async def _stop(self):
+        await self._callRemote(
             self._adapter_path,
             "StopDiscovery",
             interface="org.bluez.Adapter1",
             destination="org.bluez",
-        ).asFuture(loop)
+        )
 
         for rule in self._rules:
-            await self._bus.delMatch(rule).asFuture(loop)
+            await self._bus.delMatch(rule)
         self._rules.clear()
-
-        # Try to disconnect the System Bus.
-        try:
-            self._bus.disconnect()
-        except Exception as e:
-            logger.error("Attempt to disconnect system bus failed: {0}".format(e))
 
         self._bus = None
         self._reactor = None
@@ -177,7 +191,7 @@ class BleakScanner(BaseBleakScanner):
         """
         self._filters = kwargs.get("filters", {})
         if "Transport" not in self._filters:
-            self._filters["Transport"] = "le"
+            self._filters["Transport"] = Variant(Str,"le")
 
     async def get_discovered_devices(self) -> List[BLEDevice]:
         # Reduce output.
@@ -207,13 +221,17 @@ class BleakScanner(BaseBleakScanner):
 
     # Helper methods
 
+    async def _callRemote(self, path, method, *, returnSignature=None, **kwargs):
+        msg = Message(path=path, member=method, **kwargs)
+        res = await self._bus.call(msg)
+        if returnSignature is not None and res.signature != returnSignature:
+            raise RuntimeError("Res %r: want %s" % (res, returnSignature))
+        return res.body
+
     def parse_msg(self, message):
         if message.member == "InterfacesAdded":
             msg_path = message.body[0]
-            try:
-                device_interface = message.body[1].get(defs.DEVICE_INTERFACE, {})
-            except Exception as e:
-                raise e
+            device_interface = message.body[1].get(defs.DEVICE_INTERFACE, {})
             self._devices[msg_path] = (
                 {**self._devices[msg_path], **device_interface}
                 if msg_path in self._devices
@@ -273,7 +291,7 @@ class BleakScanner(BaseBleakScanner):
         ):
             logger.debug(
                 "{0}, {1} ({2}): {3}".format(
-                    message.member, message.interface, message.path, message.body
+                    message.member, message.interface, message.path, pformat(message.body)
                 )
             )
             return
@@ -281,7 +299,7 @@ class BleakScanner(BaseBleakScanner):
             msg_path = message.path
             logger.debug(
                 "{0}, {1} ({2}): {3}".format(
-                    message.member, message.interface, message.path, message.body
+                    message.member, message.interface, message.path, pformat(message.body)
                 )
             )
 
@@ -290,3 +308,4 @@ class BleakScanner(BaseBleakScanner):
                 *_device_info(msg_path, self._devices.get(msg_path))
             )
         )
+        logger.debug("%s: %s", msg_path, pformat(message.body))

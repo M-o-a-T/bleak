@@ -3,17 +3,17 @@
 BLE Client for BlueZ on Linux
 """
 import logging
-import asyncio
 import os
 import re
 import subprocess
 import uuid
 import warnings
+import inspect
 from functools import wraps
 from typing import Callable, Union
 from contextlib import asynccontextmanager
 
-from twisted.internet.error import ConnectionDone
+from asyncdbus import MessageBus, BusType, Message
 
 from ..device import BLEDevice
 from ..service import BleakGATTServiceCollection
@@ -76,9 +76,23 @@ class BleakClient(BaseBleakClient):
         s = re.search(b"(\\d+).(\\d+)", out.strip(b"'"))
         self._bluez_version = tuple(map(int, s.groups()))
 
-    # Connectivity methods
+    # Connectivity methods.
 
-    async def _connect(self) -> bool:
+    async def connect(self) -> bool:
+        raise NotImplementedError("You must use a context manager.")
+
+    async def __aenter__(self):
+        if self._ctx_ is not None:
+            raise RuntimeError("A ScopeSet can only be used once")
+        self._ctx_ = self._ctx()
+        return await self._ctx_.__aenter__()
+
+    async def __aexit__(self, *tb):
+        ctx, self._ctx_ = self._ctx_, None
+        return await ctx.__aexit__(*tb)  # pylint:disable=no-member  # YES IT HAS
+
+    @asynccontextmanager
+    async def _ctx(self) -> None:
         """Connect to the specified GATT server.
 
         Returns:
@@ -100,75 +114,72 @@ class BleakClient(BaseBleakClient):
                     "Device with address {0} was not found.".format(self.address)
                 )
 
-        loop = asyncio.get_event_loop()
-        self._reactor = get_reactor(loop)
+        # Connect to system bus
+        async with anyio.create_task_group() as self._tg, \
+                MessageBus(bus_type=BusType.SYSTEM).connect() as self._bus:
 
-        # Create system bus
-        self._bus = await txdbus_connect(self._reactor, busAddress="system").asFuture(
-            loop
-        )
-
-        def _services_resolved_callback(message):
-            iface, changed, invalidated = message.body
-            is_resolved = defs.DEVICE_INTERFACE and changed.get(
-                "ServicesResolved", False
-            )
-            if iface == is_resolved:
-                logger.info("Services resolved for %s", str(self))
-                self.services_resolved = True
-
-        rule_id = await signals.listen_properties_changed(
-            self._bus, _services_resolved_callback
-        )
-
-        logger.debug(
-            "Connecting to BLE device @ {0} with {1}".format(
-                self.address, self._adapter
-            )
-        )
-        try:
-            await self._bus.callRemote(
-                self._device_path,
-                "Connect",
-                interface=defs.DEVICE_INTERFACE,
-                destination=defs.BLUEZ_SERVICE,
-                timeout=timeout,
-            ).asFuture(loop)
-        except RemoteError as e:
-            await self._cleanup_all()
-            if 'Method "Connect" with signature "" on interface' in str(e):
-                raise BleakError(
-                    "Device with address {0} could not be found. "
-                    "Try increasing `timeout` value or moving the device closer.".format(
-                        self.address
-                    )
+            def _services_resolved_callback(message):
+                iface, changed, invalidated = message.body
+                is_resolved = defs.DEVICE_INTERFACE and changed.get(
+                    "ServicesResolved", False
                 )
-            else:
-                raise BleakError(str(e))
+                if iface == is_resolved:
+                    logger.info("Services resolved for %s", str(self))
+                    self.services_resolved = True
 
-        if await self.is_connected():
-            logger.debug("Connection successful.")
-        else:
-            await self._cleanup_all()
-            raise BleakError(
-                "Connection to {0} was not successful!".format(self.address)
+            rule_id = await signals.listen_properties_changed(
+                self._bus, _services_resolved_callback
             )
 
-        # Get all services. This means making the actual connection.
-        await self.get_services()
-        properties = await self._get_device_properties()
-        if not properties.get("Connected"):
-            await self._cleanup_all()
-            raise BleakError("Connection failed!")
+            logger.debug(
+                "Connecting to BLE device @ {0} with {1}".format(
+                    self.address, self._adapter
+                )
+            )
+            try:
+                await self._callRemote(
+                    self._device_path,
+                    "Connect",
+                    interface=defs.DEVICE_INTERFACE,
+                    destination=defs.BLUEZ_SERVICE,
+                    timeout=timeout,
+                )
+            except RemoteError as e:
+                await self._cleanup_all()
+                if 'Method "Connect" with signature "" on interface' in str(e):
+                    raise BleakError(
+                        "Device with address {0} could not be found. "
+                        "Try increasing `timeout` value or moving the device closer.".format(
+                            self.address
+                        )
+                    )
+                else:
+                    raise BleakError(str(e))
 
-        await self._bus.delMatch(rule_id).asFuture(loop)
-        self._rules["PropChanged"] = await signals.listen_properties_changed(
-            self._bus, self._properties_changed_callback
-        )
-        try:
-            yield self
-        finally:
-            await self.disconnect()
+            if await self.is_connected():
+                logger.debug("Connection successful.")
+            else:
+                await self._cleanup_all()
+                raise BleakError(
+                    "Connection to {0} was not successful!".format(self.address)
+                )
+
+            # Get all services. This means making the actual connection.
+            await self.get_services()
+            properties = await self._get_device_properties()
+            if not properties.get("Connected"):
+                await self._cleanup_all()
+                raise BleakError("Connection failed!")
+
+            await self._bus.delMatch(rule_id)
+            self._rules["PropChanged"] = await signals.listen_properties_changed(
+                self._bus, self._properties_changed_callback
+            )
+
+            try:
+                yield self
+            finally:
+                await self.disconnect()
 
     async def _cleanup_notifications(self) -> None:
         """
@@ -178,7 +189,7 @@ class BleakClient(BaseBleakClient):
         for rule_name, rule_id in self._rules.items():
             logger.debug("Removing rule {0}, ID: {1}".format(rule_name, rule_id))
             try:
-                await self._bus.delMatch(rule_id).asFuture(asyncio.get_event_loop())
+                await self._bus.delMatch(rule_id)
             except Exception as e:
                 logger.error(
                     "Could not remove rule {0} ({1}): {2}".format(rule_id, rule_name, e)
@@ -221,7 +232,17 @@ class BleakClient(BaseBleakClient):
         await self._cleanup_notifications()
         await self._cleanup_dbus_resources()
 
-    async def _disconnect(self) -> bool:
+    async def cleanup_all_and_cb(self) -> None:
+        await self._cleanup_all()
+        if self._disconnected_callback is not None:
+            res = self._disconnected_callback(self)
+            if inspect.iscoroutine(res):
+                await res
+
+    async def disconnect(self) -> bool:
+        raise NotImplementedError("You must use the context manager.")
+
+    async def _disconnect(self) -> None:
         """Disconnect from the specified GATT server.
 
         Returns:
@@ -240,12 +261,12 @@ class BleakClient(BaseBleakClient):
 
         # Try to disconnect the actual device/peripheral
         try:
-            await self._bus.callRemote(
+            await self._callRemote(
                 self._device_path,
                 "Disconnect",
                 interface=defs.DEVICE_INTERFACE,
                 destination=defs.BLUEZ_SERVICE,
-            ).asFuture(asyncio.get_event_loop())
+            )
         except Exception as e:
             logger.error("Attempt to disconnect device failed: {0}".format(e))
 
@@ -256,7 +277,6 @@ class BleakClient(BaseBleakClient):
         # Reset all stored services.
         self.services = BleakGATTServiceCollection()
         self._services_resolved = False
-
         return is_disconnected
 
     async def pair(self, *args, **kwargs) -> bool:
@@ -269,10 +289,8 @@ class BleakClient(BaseBleakClient):
             Boolean regarding success of pairing.
 
         """
-        loop = asyncio.get_event_loop()
-
         # See if it is already paired.
-        is_paired = await self._bus.callRemote(
+        is_paired = await self._callRemote(
             self._device_path,
             "Get",
             interface=defs.PROPERTIES_INTERFACE,
@@ -280,12 +298,12 @@ class BleakClient(BaseBleakClient):
             signature="ss",
             body=[defs.DEVICE_INTERFACE, "Paired"],
             returnSignature="v",
-        ).asFuture(asyncio.get_event_loop())
+        )
         if is_paired:
             return is_paired
 
         # Set device as trusted.
-        await self._bus.callRemote(
+        await self._callRemote(
             self._device_path,
             "Set",
             interface=defs.PROPERTIES_INTERFACE,
@@ -293,25 +311,25 @@ class BleakClient(BaseBleakClient):
             signature="ssv",
             body=[defs.DEVICE_INTERFACE, "Trusted", True],
             returnSignature="",
-        ).asFuture(asyncio.get_event_loop())
+        )
 
         logger.debug(
             "Pairing to BLE device @ {0} with {1}".format(self.address, self._adapter)
         )
         try:
-            await self._bus.callRemote(
+            await self._callRemote(
                 self._device_path,
                 "Pair",
                 interface=defs.DEVICE_INTERFACE,
                 destination=defs.BLUEZ_SERVICE,
-            ).asFuture(loop)
+            )
         except RemoteError:
             await self._cleanup_all()
             raise BleakError(
                 "Device with address {0} could not be paired with.".format(self.address)
             )
 
-        return await self._bus.callRemote(
+        return await self._callRemote(
             self._device_path,
             "Get",
             interface=defs.PROPERTIES_INTERFACE,
@@ -319,7 +337,7 @@ class BleakClient(BaseBleakClient):
             signature="ss",
             body=[defs.DEVICE_INTERFACE, "Paired"],
             returnSignature="v",
-        ).asFuture(asyncio.get_event_loop())
+        )
 
     async def unpair(self) -> bool:
         """Unpair with the peripheral.
@@ -343,7 +361,7 @@ class BleakClient(BaseBleakClient):
         # TODO: Listen to connected property changes.
         is_connected = False
         try:
-            is_connected = await self._bus.callRemote(
+            is_connected = await self._callRemote(
                 self._device_path,
                 "Get",
                 interface=defs.PROPERTIES_INTERFACE,
@@ -351,7 +369,7 @@ class BleakClient(BaseBleakClient):
                 signature="ss",
                 body=[defs.DEVICE_INTERFACE, "Connected"],
                 returnSignature="v",
-            ).asFuture(asyncio.get_event_loop())
+            )
         except AttributeError:
             # The `self._bus` object had already been cleaned up due to disconnect...
             pass
@@ -384,7 +402,7 @@ class BleakClient(BaseBleakClient):
             services_resolved = properties.get("ServicesResolved", False)
             if services_resolved:
                 break
-            await asyncio.sleep(sleep_loop_sec)
+            await anyio.sleep(sleep_loop_sec)
             total_slept_sec += sleep_loop_sec
 
         if not services_resolved:
@@ -503,7 +521,7 @@ class BleakClient(BaseBleakClient):
             )
 
         value = bytearray(
-            await self._bus.callRemote(
+            await self._callRemote(
                 characteristic.path,
                 "ReadValue",
                 interface=defs.GATT_CHARACTERISTIC_INTERFACE,
@@ -511,7 +529,7 @@ class BleakClient(BaseBleakClient):
                 signature="a{sv}",
                 body=[{}],
                 returnSignature="ay",
-            ).asFuture(asyncio.get_event_loop())
+            )
         )
 
         logger.debug(
@@ -536,7 +554,7 @@ class BleakClient(BaseBleakClient):
             raise BleakError("Descriptor with handle {0} was not found!".format(handle))
 
         value = bytearray(
-            await self._bus.callRemote(
+            await self._callRemote(
                 descriptor.path,
                 "ReadValue",
                 interface=defs.GATT_DESCRIPTOR_INTERFACE,
@@ -544,7 +562,7 @@ class BleakClient(BaseBleakClient):
                 signature="a{sv}",
                 body=[{}],
                 returnSignature="ay",
-            ).asFuture(asyncio.get_event_loop())
+            )
         )
 
         logger.debug(
@@ -613,7 +631,7 @@ class BleakClient(BaseBleakClient):
             raise BleakError("Write without response requires at least BlueZ 5.46")
         if response or (self._bluez_version[0] == 5 and self._bluez_version[1] > 50):
             # TODO: Add OnValueUpdated handler for response=True?
-            await self._bus.callRemote(
+            await self._callRemote(
                 characteristic.path,
                 "WriteValue",
                 interface=defs.GATT_CHARACTERISTIC_INTERFACE,
@@ -621,12 +639,12 @@ class BleakClient(BaseBleakClient):
                 signature="aya{sv}",
                 body=[data, {"type": "request" if response else "command"}],
                 returnSignature="",
-            ).asFuture(asyncio.get_event_loop())
+            )
         else:
             # Older versions of BlueZ don't have the "type" option, so we have
             # to write the hard way. This isn't the most efficient way of doing
             # things, but it works.
-            fd, _ = await self._bus.callRemote(
+            fd, _ = await self._callRemote(
                 characteristic.path,
                 "AcquireWrite",
                 interface=defs.GATT_CHARACTERISTIC_INTERFACE,
@@ -634,7 +652,7 @@ class BleakClient(BaseBleakClient):
                 signature="a{sv}",
                 body=[{}],
                 returnSignature="hq",
-            ).asFuture(asyncio.get_event_loop())
+            )
             os.write(fd, data)
             os.close(fd)
 
@@ -655,7 +673,7 @@ class BleakClient(BaseBleakClient):
         descriptor = self.services.get_descriptor(handle)
         if not descriptor:
             raise BleakError("Descriptor with handle {0} was not found!".format(handle))
-        await self._bus.callRemote(
+        await self._callRemote(
             descriptor.path,
             "WriteValue",
             interface=defs.GATT_DESCRIPTOR_INTERFACE,
@@ -663,7 +681,7 @@ class BleakClient(BaseBleakClient):
             signature="aya{sv}",
             body=[data, {"type": "command"}],
             returnSignature="",
-        ).asFuture(asyncio.get_event_loop())
+        )
 
         logger.debug(
             "Write Descriptor {0} | {1}: {2}".format(handle, descriptor.path, data)
@@ -739,7 +757,7 @@ class BleakClient(BaseBleakClient):
 
         self._subscriptions.append(characteristic.handle)
 
-        await self._bus.callRemote(
+        await self._callRemote(
             characteristic.path,
             "StartNotify",
             interface=defs.GATT_CHARACTERISTIC_INTERFACE,
@@ -747,7 +765,7 @@ class BleakClient(BaseBleakClient):
             signature="",
             body=[],
             returnSignature="",
-        ).asFuture(asyncio.get_event_loop())
+        )
 
     async def stop_notify(
         self,
@@ -768,7 +786,7 @@ class BleakClient(BaseBleakClient):
         if not characteristic:
             raise BleakError("Characteristic {} not found!".format(char_specifier))
 
-        await self._bus.callRemote(
+        await self._callRemote(
             characteristic.path,
             "StopNotify",
             interface=defs.GATT_CHARACTERISTIC_INTERFACE,
@@ -776,7 +794,7 @@ class BleakClient(BaseBleakClient):
             signature="",
             body=[],
             returnSignature="",
-        ).asFuture(asyncio.get_event_loop())
+        )
         self._notification_callbacks.pop(characteristic.path, None)
 
         self._subscriptions.remove(characteristic.handle)
@@ -807,7 +825,7 @@ class BleakClient(BaseBleakClient):
         if not characteristic:
             raise BleakError("Characteristic {} not found!".format(char_specifier))
 
-        out = await self._bus.callRemote(
+        out = await self._callRemote(
             characteristic.path,
             "GetAll",
             interface=defs.PROPERTIES_INTERFACE,
@@ -815,7 +833,7 @@ class BleakClient(BaseBleakClient):
             signature="s",
             body=[defs.GATT_CHARACTERISTIC_INTERFACE],
             returnSignature="a{sv}",
-        ).asFuture(asyncio.get_event_loop())
+        )
         return out
 
     async def _get_device_properties(self, interface=defs.DEVICE_INTERFACE) -> dict:
@@ -828,7 +846,7 @@ class BleakClient(BaseBleakClient):
             (dict) The properties.
 
         """
-        return await self._bus.callRemote(
+        return await self._callRemote(
             self._device_path,
             "GetAll",
             interface=defs.PROPERTIES_INTERFACE,
@@ -836,7 +854,14 @@ class BleakClient(BaseBleakClient):
             signature="s",
             body=[interface],
             returnSignature="a{sv}",
-        ).asFuture(asyncio.get_event_loop())
+        )
+
+    async def _callRemote(self, path, method, *, returnSignature="", **kwargs):
+        msg = Message(path=path, method=method, **kwargs)
+        res = await self._bus.call(msg)
+        if res.signature != returnSignature:
+            raise RuntimeError("Res %r: want %s" % (res, returnSignature))
+        return res.body
 
     # Internal Callbacks
 
@@ -882,11 +907,7 @@ class BleakClient(BaseBleakClient):
                 ):
                     logger.debug("Device {} disconnected.".format(self.address))
 
-                    task = asyncio.get_event_loop().create_task(self._cleanup_all())
-                    if self._disconnected_callback is not None:
-                        task.add_done_callback(
-                            lambda _: self._disconnected_callback(self)
-                        )
+                    self._tg.spawn(self._cleanup_all_and_cb)
 
 
 def _data_notification_wrapper(func, char_map):

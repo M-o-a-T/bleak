@@ -1,6 +1,6 @@
 from typing import List
 
-from ..service import BleakGATTService as baseGATTService
+from ..service import BleakGATTService as BaseGATTService
 from .characteristic import BleakGATTCharacteristic
 
 
