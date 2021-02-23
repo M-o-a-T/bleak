@@ -112,7 +112,7 @@ class BleakScanner(BaseBleakScanner):
                 await self._stop()
 
     async def _start(self):
-        # Add signal listeners
+        # Add signal listener
         self._bus.add_message_handler(self.parse_msg)
 
         # Find the HCI device to use for scanning and get cached device properties
