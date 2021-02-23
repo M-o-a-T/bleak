@@ -72,7 +72,6 @@ class BleakScanner(BaseBleakScanner):
 
         # kwarg "device" is for backwards compatibility
         self._adapter = kwargs.get("adapter", kwargs.get("device", "hci0"))
-        self._reactor = None
         self._bus = None
 
         self._cached_devices = {}
@@ -177,7 +176,6 @@ class BleakScanner(BaseBleakScanner):
         self._rules.clear()
 
         self._bus = None
-        self._reactor = None
 
     async def set_scanning_filter(self, **kwargs):
         """Sets OS level scanning filters for the BleakScanner.
