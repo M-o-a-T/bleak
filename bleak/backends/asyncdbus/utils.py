@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import re
 from asyncdbus import Message
+from asyncdbus.signature import Variant
 
 from ...uuids import uuidstr_to_str
 from . import defs
@@ -45,3 +46,14 @@ def format_GATT_object(object_path, interfaces):
     return "\n{0}\n\t{1}\n\t{2}\n\t{3}".format(
         _type, object_path, _uuid, uuidstr_to_str(_uuid)
     )
+
+
+def de_variate(obj):
+    if isinstance(obj,Variant):
+        return de_variate(obj.value)
+    elif isinstance(obj, dict):
+        return { k:de_variate(v) for k,v in obj.items() }
+    elif isinstance(obj, (list,tuple)):
+        return [ de_variate(v) for v in obj ]
+    else:
+        return obj

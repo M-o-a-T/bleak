@@ -3,11 +3,12 @@ import pathlib
 from typing import List
 from contextlib import asynccontextmanager
 from pprint import pformat
+import anyio
 
 from ..scanner import BaseBleakScanner, AdvertisementData
 from ..device import BLEDevice
 from . import defs
-from .utils import validate_mac_address
+from .utils import validate_mac_address, de_variate
 
 from asyncdbus import MessageBus, BusType, Message
 from asyncdbus.signature import Variant,Str
@@ -33,7 +34,7 @@ def _filter_on_device(objs):
         if device is None:
             continue
 
-        yield path, device
+        yield path, de_variate(device)
 
 
 def _device_info(path, props):
@@ -87,14 +88,14 @@ class BleakScanner(BaseBleakScanner):
         self._interface = None
 
     async def start(self):
-        raise RuntimeError("You need to use a context manager")
+        raise RuntimeError("You need to use an async context manager")
 
     async def stop(self):
-        raise RuntimeError("You need to use a context manager")
+        raise RuntimeError("You need to use an async context manager")
 
     async def __aenter__(self):
         if self._ctx_ is not None:
-            raise RuntimeError("A ScopeSet can only be used once")
+            raise RuntimeError("You can't nest contexts")
         self._ctx_ = self._ctx()
         return await self._ctx_.__aenter__()
 
@@ -124,6 +125,10 @@ class BleakScanner(BaseBleakScanner):
         )
         self._adapter_path, self._interface = _filter_on_adapter(objects, self._adapter)
         self._cached_devices = dict(_filter_on_device(objects))
+        for path, props in self._cached_devices.items():
+            if 'RSSI' in props:
+                self._devices[path] = props
+                self._send_callback(props, None)
 
         # Apply the filters
         await self._callRemote(
@@ -231,11 +236,13 @@ class BleakScanner(BaseBleakScanner):
         if message.member == "InterfacesAdded":
             msg_path = message.body[0]
             device_interface = message.body[1].get(defs.DEVICE_INTERFACE, {})
-            self._devices[msg_path] = (
+            self._devices[msg_path] = props = (
                 {**self._devices[msg_path], **device_interface}
                 if msg_path in self._devices
                 else device_interface
             )
+            self._send_callback(props, message)
+
         elif message.member == "PropertiesChanged":
             iface, changed, invalidated = message.body
             if iface != defs.DEVICE_INTERFACE:
@@ -248,41 +255,12 @@ class BleakScanner(BaseBleakScanner):
             # they may not actually be nearby or powered on.
             if msg_path not in self._devices and msg_path in self._cached_devices:
                 self._devices[msg_path] = self._cached_devices[msg_path]
-            self._devices[msg_path] = (
+            self._devices[msg_path] = props = (
                 {**self._devices[msg_path], **changed}
                 if msg_path in self._devices
                 else changed
             )
-
-            if self._callback is None:
-                return
-
-            props = self._devices[msg_path]
-
-            # Get all the information wanted to pack in the advertisement data
-            _local_name = props.get("Name")
-            _manufacturer_data = {
-                k: bytes(v) for k, v in props.get("ManufacturerData", {}).items()
-            }
-            _service_data = {
-                k: bytes(v) for k, v in props.get("ServiceData", {}).items()
-            }
-            _service_uuids = props.get("UUIDs", [])
-
-            # Pack the advertisement data
-            advertisement_data = AdvertisementData(
-                local_name=_local_name,
-                manufacturer_data=_manufacturer_data,
-                service_data=_service_data,
-                service_uuids=_service_uuids,
-                platform_data=(props, message),
-            )
-
-            device = BLEDevice(
-                props["Address"], props["Alias"], props, props.get("RSSI", 0)
-            )
-
-            self._callback(device, advertisement_data)
+            self._send_callback(props, message)
 
         elif (
             message.member == "InterfacesRemoved"
@@ -307,4 +285,87 @@ class BleakScanner(BaseBleakScanner):
                 *_device_info(msg_path, self._devices.get(msg_path))
             )
         )
-        logger.debug("%s: %s", msg_path, pformat(message.body))
+
+    def _send_callback(self, props, message):
+        if self._callback is None:
+            return
+
+        props = de_variate(props)
+
+        # Get all the information wanted to pack in the advertisement data
+        _local_name = props.get("Name")
+        _manufacturer_data = {
+            k: bytes(v) for k, v in props.get("ManufacturerData", {}).items()
+        }
+        _service_data = {
+            k: bytes(v) for k, v in props.get("ServiceData", {}).items()
+        }
+        _service_uuids = props.get("UUIDs", [])
+
+        # Pack the advertisement data
+        advertisement_data = AdvertisementData(
+            local_name=_local_name,
+            manufacturer_data=_manufacturer_data,
+            service_data=_service_data,
+            service_uuids=_service_uuids,
+            platform_data=(props, message),
+        )
+
+        device = BLEDevice(
+            props["Address"], props["Alias"], props, props.get("RSSI", 0)
+        )
+
+        self._callback(device, advertisement_data)
+
+
+    @classmethod
+    async def find_device_by_address( 
+        cls, device_identifier: str, timeout: float = 10.0, **kwargs   
+    ) -> BLEDevice:
+        """A convenience method for obtaining a ``BLEDevice`` object specified by Bluetooth address.
+
+        Args:
+            device_identifier (str): The Bluetooth/UUID address of the Bluetooth peripheral sought.
+            timeout (float): Optional timeout to wait for detection of specified peripheral before giving up. Defaults to 10.0 seconds.
+        
+        Keyword Args:
+            adapter (str): Bluetooth adapter to use for discovery.
+        
+        Returns:
+            The ``BLEDevice`` sought or ``None`` if not detected.
+        
+        """
+        device_identifier = device_identifier.lower()
+        stop_scanning_event = anyio.create_event()
+            
+        def stop_if_detected(d: BLEDevice, ad: AdvertisementData):
+            if d.address.lower() == device_identifier:
+                stop_scanning_event.set()
+            
+        async with cls(detection_callback=stop_if_detected, **kwargs) as scanner:
+            with anyio.move_on_after(timeout):
+                await stop_scanning_event.wait()
+                return next(
+                    d
+                    for d in await scanner.get_discovered_devices()
+                    if d.address.lower() == device_identifier
+                )
+            return None
+
+    @classmethod
+    async def discover(cls, timeout=5.0, **kwargs) -> List[BLEDevice]:
+        """Scan continuously for ``timeout`` seconds and return discovered devices.
+
+        Args:
+            timeout: Time to scan for.
+
+        Keyword Args:
+            **kwargs: Implementations might offer additional keyword arguments sent to the constructor of the
+                      BleakScanner class.
+
+        Returns:
+
+        """
+        async with cls(**kwargs) as scanner:
+            await anyio.sleep(timeout)
+            return await scanner.get_discovered_devices()

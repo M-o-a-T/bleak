@@ -12,6 +12,7 @@ import inspect
 from functools import wraps
 from typing import Callable, Union
 from contextlib import asynccontextmanager
+import anyio
 
 from asyncdbus import MessageBus, BusType, Message
 
@@ -19,7 +20,7 @@ from ..device import BLEDevice
 from ..service import BleakGATTServiceCollection
 from ...exc import BleakError
 from ..client import BaseBleakClient
-from ..bluezdbus import defs, signals, utils, get_reactor
+from . import defs, signals, utils, get_reactor
 from .scanner import BleakScanner
 from .utils import get_managed_objects
 from .service import BleakGATTService
@@ -48,6 +49,8 @@ class BleakClient(BaseBleakClient):
             argument, which will be this client object.
         adapter (str): Bluetooth adapter to use for discovery.
     """
+
+    _ctx_ = None
 
     def __init__(self, address_or_ble_device: Union[BLEDevice, str], **kwargs):
         super().__init__(address_or_ble_device, **kwargs)

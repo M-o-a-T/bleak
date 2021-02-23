@@ -214,11 +214,13 @@ class BleakScannerBlueZDBus(BaseBleakScanner):
                 device_interface = message.body[1].get(defs.DEVICE_INTERFACE, {})
             except Exception as e:
                 raise e
-            self._devices[msg_path] = (
+            self._devices[msg_path] = props = (
                 {**self._devices[msg_path], **device_interface}
                 if msg_path in self._devices
                 else device_interface
             )
+            self._send_callback(props, message)
+
         elif message.member == "PropertiesChanged":
             iface, changed, invalidated = message.body
             if iface != defs.DEVICE_INTERFACE:
@@ -231,41 +233,12 @@ class BleakScannerBlueZDBus(BaseBleakScanner):
             # they may not actually be nearby or powered on.
             if msg_path not in self._devices and msg_path in self._cached_devices:
                 self._devices[msg_path] = self._cached_devices[msg_path]
-            self._devices[msg_path] = (
+            self._devices[msg_path] = props = (
                 {**self._devices[msg_path], **changed}
                 if msg_path in self._devices
                 else changed
             )
-
-            if self._callback is None:
-                return
-
-            props = self._devices[msg_path]
-
-            # Get all the information wanted to pack in the advertisement data
-            _local_name = props.get("Name")
-            _manufacturer_data = {
-                k: bytes(v) for k, v in props.get("ManufacturerData", {}).items()
-            }
-            _service_data = {
-                k: bytes(v) for k, v in props.get("ServiceData", {}).items()
-            }
-            _service_uuids = props.get("UUIDs", [])
-
-            # Pack the advertisement data
-            advertisement_data = AdvertisementData(
-                local_name=_local_name,
-                manufacturer_data=_manufacturer_data,
-                service_data=_service_data,
-                service_uuids=_service_uuids,
-                platform_data=(props, message),
-            )
-
-            device = BLEDevice(
-                props["Address"], props["Alias"], props, props.get("RSSI", 0)
-            )
-
-            self._callback(device, advertisement_data)
+            self._send_callback(props, message)
 
         elif (
             message.member == "InterfacesRemoved"
@@ -290,3 +263,32 @@ class BleakScannerBlueZDBus(BaseBleakScanner):
                 *_device_info(msg_path, self._devices.get(msg_path))
             )
         )
+
+    def _send_callback(self, props, message):
+        if self._callback is None:
+            return
+
+        # Get all the information wanted to pack in the advertisement data
+        _local_name = props.get("Name")
+        _manufacturer_data = {
+            k: bytes(v) for k, v in props.get("ManufacturerData", {}).items()
+        }
+        _service_data = {
+            k: bytes(v) for k, v in props.get("ServiceData", {}).items()
+        }
+        _service_uuids = props.get("UUIDs", [])
+
+        # Pack the advertisement data
+        advertisement_data = AdvertisementData(
+            local_name=_local_name,
+            manufacturer_data=_manufacturer_data,
+            service_data=_service_data,
+            service_uuids=_service_uuids,
+            platform_data=(props, message),
+        )
+
+        device = BLEDevice(
+            props["Address"], props["Alias"], props, props.get("RSSI", 0)
+        )
+
+        self._callback(device, advertisement_data)
