@@ -123,6 +123,11 @@ class BleakScannerBlueZDBus(BaseBleakScanner):
         ).asFuture(loop)
         self._adapter_path, self._interface = _filter_on_adapter(objects, self._adapter)
         self._cached_devices = dict(_filter_on_device(objects))
+        for path, props in self._cached_devices.items():
+            if True: # 'RSSI' in props:
+                self._devices[path] = props
+                self._send_callback(props, None)
+
 
         # Apply the filters
         await self._bus.callRemote(
