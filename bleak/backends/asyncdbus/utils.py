@@ -17,10 +17,11 @@ def validate_mac_address(address):
 async def get_managed_objects(bus, object_path_filter=None):
     objects = (await bus.call(Message(
             path="/",
-            method="GetManagedObjects",
+            member="GetManagedObjects",
             interface="org.freedesktop.DBus.ObjectManager",
             destination="org.bluez",
-        ))).body
+        ))).body[0]
+    objects = de_variate(objects)
     if object_path_filter:
         return dict(
             filter(lambda i: i[0].startswith(object_path_filter), objects.items())

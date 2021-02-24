@@ -300,17 +300,16 @@ class BleakClient(BaseBleakClient):
                 yield self
             finally:
                 with anyio.move_on_after(2, shield=True):
-                    await self.disconnect()
+                    await self._disconnect()
 
     async def _cleanup_notifications(self) -> None:
         """
         Remove all pending notifications of the client. This method is used to
         free the DBus matches that have been established.
         """
-        for rule_name, rule_id in self._rules.items():
-            logger.debug("Removing rule {0}, ID: {1}".format(rule_name, rule_id))
+        for rule in self._rules:
             try:
-                await self._bus.delMatch(rule_id)
+                await remove_match(self._bus, rule)
             except Exception as e:
                 logger.error(
                     "Could not remove rule {0} ({1}): {2}".format(rule_id, rule_name, e)
@@ -373,7 +372,6 @@ class BleakClient(BaseBleakClient):
         self._bus = None
 
     async def _call_disconnect(self):
-        import pdb;pdb.set_trace()
         if self._disconnect_monitor_event is None:
             self._disconnect_monitor_event = evt = anyio.create_event()
         else:
@@ -494,6 +492,7 @@ class BleakClient(BaseBleakClient):
 
         while total_slept_sec < 5.0:
             properties = await self._get_device_properties()
+
             services_resolved = properties.get("ServicesResolved", False)
             if services_resolved:
                 break
@@ -945,6 +944,9 @@ class BleakClient(BaseBleakClient):
         except Exception as exc:
             breakpoint()
             raise
+
+        if isinstance(res.body,(tuple,list)) and len(res.body) == 1:
+            return res.body[0]
         return res.body
 
     # Internal Callbacks

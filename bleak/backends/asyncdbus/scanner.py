@@ -128,7 +128,7 @@ class BleakScanner(BaseBleakScanner):
         for path, props in self._cached_devices.items():
             if True: # 'RSSI' in props:
                 self._devices[path] = props
-                self._send_callback(props, None)
+                self._send_callback(path, props, None)
 
         # Apply the filters
         await self._callRemote(
@@ -236,12 +236,15 @@ class BleakScanner(BaseBleakScanner):
         if message.member == "InterfacesAdded":
             msg_path = message.body[0]
             device_interface = message.body[1].get(defs.DEVICE_INTERFACE, {})
+            if msg_path == "/":
+                return
             self._devices[msg_path] = props = (
                 {**self._devices[msg_path], **device_interface}
                 if msg_path in self._devices
                 else device_interface
             )
-            self._send_callback(props, message)
+            if 'Address' in props:
+                self._send_callback(msg_path, props, message)
 
         elif message.member == "PropertiesChanged":
             iface, changed, invalidated = message.body
@@ -260,7 +263,7 @@ class BleakScanner(BaseBleakScanner):
                 if msg_path in self._devices
                 else changed
             )
-            self._send_callback(props, message)
+            self._send_callback(msg_path, props, message)
 
         elif (
             message.member == "InterfacesRemoved"
@@ -286,11 +289,12 @@ class BleakScanner(BaseBleakScanner):
             )
         )
 
-    def _send_callback(self, props, message):
+    def _send_callback(self, path, props, message):
         if self._callback is None:
             return
 
         props = de_variate(props)
+        dev_props = {'path': path, 'props': props}
 
         # Get all the information wanted to pack in the advertisement data
         _local_name = props.get("Name")
@@ -311,11 +315,14 @@ class BleakScanner(BaseBleakScanner):
             platform_data=(props, message),
         )
 
-        device = BLEDevice(
-            props["Address"], props["Alias"], props, props.get("RSSI", 0)
-        )
-
-        self._callback(device, advertisement_data)
+        try:
+            device = BLEDevice(
+                props["Address"], props["Alias"], dev_props, props.get("RSSI", 0)
+            )
+        except KeyError:
+            pass
+        else:
+            self._callback(device, advertisement_data)
 
 
     @classmethod
