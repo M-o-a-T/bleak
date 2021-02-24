@@ -1,14 +1,11 @@
 from bleak import BleakClient
 import asyncio
+import anyio
 
 temperatureUUID = "45366e80-cf3a-11e1-9ab4-0002a5d5c51b"
 ecgUUID = "46366e80-cf3a-11e1-9ab4-0002a5d5c51b"
 
 notify_uuid = "0000{0:x}-0000-1000-8000-00805f9b34fb".format(0xFFE1)
-
-
-def callback(sender, data):
-    print(sender, data)
 
 
 def run(addresses):
@@ -25,9 +22,10 @@ async def connect_to_device(address, loop):
 
         print("connect to", address)
         try:
-            await client.start_notify(notify_uuid, callback)
-            await asyncio.sleep(10.0)
-            await client.stop_notify(notify_uuid)
+            with anyio.move_on_after(10):
+                async with client.notification(notify_uuid) as msgs:
+                    async for data in msgs:
+                        print(sender, data)
         except Exception as e:
             print(e)
 

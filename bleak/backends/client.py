@@ -7,7 +7,9 @@ Created on 2018-04-23 by hbldh <henrik.blidh@nedomkull.com>
 """
 import abc
 import uuid
+import anyio
 from typing import Callable, Union
+from contextlib import asynccontextmanager
 
 from .service import BleakGATTServiceCollection
 from .characteristic import BleakGATTCharacteristic
@@ -203,6 +205,35 @@ class BaseBleakClient(abc.ABC):
 
         """
         raise NotImplementedError()
+
+    @asynccontextmanager
+    async def notification(self, char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID]):
+        """Activate notifications/indications on a characteristic.
+
+        This is an async context manager which returns an async iterator
+        that yields a ``bytearray`` each time the notification triggers.
+
+        .. code-block:: python
+
+            async with client.notification(char_uuid) as notes:
+                async for sender, data in notes:
+                    print(f"{sender}: {data}")
+
+        Args:
+            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to activate
+                notifications/indications on a characteristic, specified by either integer handle,
+                UUID or directly by the BleakGATTCharacteristic object representing it.
+
+        """
+        async def enq(a:int, b:bytearray):
+            q_w.send_nowait(b)
+
+        await self.start_notify(char_specifier, enq)
+        q_w,q_r = anyio.create_memory_object_stream(10)
+        try:
+            yield q_r
+        finally:
+            await self.stop_notify(char_specifier)
 
     @abc.abstractmethod
     async def start_notify(

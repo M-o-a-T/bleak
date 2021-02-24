@@ -8,7 +8,7 @@ Usage
     the means of specifying characteristics by UUID or string representation of it
     might not always work in bleak version > 0.7.0. One can now also use the characteristic's
     handle or even the ``BleakGATTCharacteristic`` object itself in
-    ``read_gatt_char``, ``write_gatt_char``, ``start_notify``, and ``stop_notify``.
+    ``read_gatt_char``, ``write_gatt_char``, and ``notification``.
 
 
 One can use the ``BleakClient`` to connect to a Bluetooth device and read its model number
