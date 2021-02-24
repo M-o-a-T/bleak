@@ -111,9 +111,9 @@ class BleakGATTServiceCollection(object):
         """
         if service.uuid not in self.__services:
             self.__services[service.uuid] = service
-        else:
+        elif self.__services[service.uuid].obj != service.obj:
             raise BleakError(
-                "This service is already present in this BleakGATTServiceCollection!"
+                "Service %r is already present in this BleakGATTServiceCollection!" % (service.uuid,)
             )
 
     def get_service(self, _uuid: Union[str, UUID]) -> BleakGATTService:
@@ -130,9 +130,9 @@ class BleakGATTServiceCollection(object):
             self.__services[characteristic.service_uuid].add_characteristic(
                 characteristic
             )
-        else:
+        elif self.__characteristics[characteristic.handle].obj != characteristic.obj:
             raise BleakError(
-                "This characteristic is already present in this BleakGATTServiceCollection!"
+                "Characteristic %r is already present in this BleakGATTServiceCollection!" % (characteristic.handle,)
             )
 
     def get_characteristic(
@@ -166,9 +166,9 @@ class BleakGATTServiceCollection(object):
             self.__characteristics[descriptor.characteristic_handle].add_descriptor(
                 descriptor
             )
-        else:
+        elif self.__descriptors[descriptor.handle].obj != descriptor.obj:
             raise BleakError(
-                "This descriptor is already present in this BleakGATTServiceCollection!"
+                "Descriptor %r is already present in this BleakGATTServiceCollection!" % (descriptor.handle,)
             )
 
     def get_descriptor(self, handle: int) -> BleakGATTDescriptor:
