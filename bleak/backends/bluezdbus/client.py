@@ -107,7 +107,7 @@ class BleakClientBlueZDBus(BaseBleakClient):
         self._reactor = get_reactor(loop)
 
         # Create system bus
-        self._bus = await txdbus_connect(self._reactor, busAddress="system")
+        self._bus = await txdbus_connect(self._reactor, busAddress="system").asFuture(loop)
 
         def _services_resolved_callback(message):
             iface, changed, invalidated = message.body
