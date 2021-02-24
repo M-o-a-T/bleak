@@ -126,7 +126,7 @@ class BleakScanner(BaseBleakScanner):
         self._adapter_path, self._interface = _filter_on_adapter(objects, self._adapter)
         self._cached_devices = dict(_filter_on_device(objects))
         for path, props in self._cached_devices.items():
-            if 'RSSI' in props:
+            if True: # 'RSSI' in props:
                 self._devices[path] = props
                 self._send_callback(props, None)
 

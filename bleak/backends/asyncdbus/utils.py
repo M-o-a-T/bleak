@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import re
+from asyncdbus.constants import MessageType
 from asyncdbus import Message
 from asyncdbus.signature import Variant
 
@@ -57,3 +58,15 @@ def de_variate(obj):
         return [ de_variate(v) for v in obj ]
     else:
         return obj
+
+def assert_reply(reply: Message):
+    """Checks that a D-Bus message is a valid reply.
+
+    Raises:
+        BleakDBusError: if the message type is ``MessageType.ERROR``
+        AssentationError: if the message type is not ``MessageType.METHOD_RETURN``
+    """
+    if reply.message_type != MessageType.METHOD_RETURN:
+        raise RuntimeError("Wrong message type: %r" % (reply,))
+
+

@@ -9,23 +9,26 @@ import subprocess
 import uuid
 import warnings
 import inspect
+import anyio
 from functools import wraps
 from typing import Callable, Union
 from contextlib import asynccontextmanager
-import anyio
+from uuid import UUID
 
-from asyncdbus import MessageBus, BusType, Message
+
+from asyncdbus import MessageBus, BusType, Message, MessageType
 
 from ..device import BLEDevice
 from ..service import BleakGATTServiceCollection
 from ...exc import BleakError
 from ..client import BaseBleakClient
-from . import defs, signals, utils, get_reactor
+from . import defs, utils
 from .scanner import BleakScanner
-from .utils import get_managed_objects
+from .utils import get_managed_objects, assert_reply, de_variate
 from .service import BleakGATTService
 from .characteristic import BleakGATTCharacteristic
 from .descriptor import BleakGATTDescriptor
+from .signals import MatchRules, add_match, remove_match
 
 ## from txdbus.client import connect as txdbus_connect
 ## from txdbus.error import RemoteError
@@ -43,7 +46,6 @@ class BleakClient(BaseBleakClient):
         address_or_ble_device (`BLEDevice` or str): The Bluetooth address of the BLE peripheral to connect to or the `BLEDevice` object representing it.
 
     Keyword Args:
-        timeout (float): Timeout for required ``BleakScanner.find_device_by_address`` call. Defaults to 10.0.
         disconnected_callback (callable): Callback that will be scheduled in the
             event loop when the client is disconnected. The callable must take one
             argument, which will be this client object.
@@ -64,13 +66,31 @@ class BleakClient(BaseBleakClient):
         else:
             self._device_path = None
             self._device_info = None
-        self._bus = None
-        self._reactor = None
-        self._rules = {}
-        self._subscriptions = list()
+
+        # D-Bus message bus
+        self._bus: MessageBus = None
+
+        # match rules we are subscribed to that need to be removed on disconnect
+        self._rules: List[MatchRules] = []
+
+        # D-Bus properties for the device
+        self._properties: Dict[str, Any] = {}
+
+        # list of characteristic handles that have notifications enabled
+        self._subscriptions: List[int] = []
 
         # This maps DBus paths of GATT Characteristics to their BLE handles.
         self._char_path_to_handle = {}
+
+        # provides synchronization between get_services() and PropertiesChanged signal
+        self._services_resolved_event: anyio.abc.Event = None
+
+        # indicates disconnect request in progress when not None
+        self._disconnecting_event: anyio.abc.Event = None
+
+        # used to ensure device gets disconnected if event loop crashes
+        self._disconnect_monitor_event: anyio.abc.Event = None
+
 
         # We need to know BlueZ version since battery level characteristic
         # are stored in a separate DBus interface in the BlueZ >= 5.48.
@@ -118,21 +138,135 @@ class BleakClient(BaseBleakClient):
                 )
 
         # Connect to system bus
-        async with anyio.create_task_group() as self._tg, \
-                MessageBus(bus_type=BusType.SYSTEM).connect() as self._bus:
+        async with MessageBus(bus_type=BusType.SYSTEM).connect() as self._bus:
 
-            def _services_resolved_callback(message):
-                iface, changed, invalidated = message.body
-                is_resolved = defs.DEVICE_INTERFACE and changed.get(
-                    "ServicesResolved", False
-                )
-                if iface == is_resolved:
-                    logger.info("Services resolved for %s", str(self))
-                    self.services_resolved = True
+            self._bus.add_message_handler(self._parse_msg)
 
-            rule_id = await signals.listen_properties_changed(
-                self._bus, _services_resolved_callback
+            rules = MatchRules(
+                interface=defs.OBJECT_MANAGER_INTERFACE,
+                member="InterfacesAdded",
+                arg0path=f"{self._device_path}/",
             )
+            reply = await add_match(self._bus, rules)
+            assert_reply(reply)
+            self._rules.append(rules)
+
+            rules = MatchRules(
+                interface=defs.OBJECT_MANAGER_INTERFACE,
+                member="InterfacesRemoved",
+                arg0path=f"{self._device_path}/",
+            )    
+            reply = await add_match(self._bus, rules)
+            assert_reply(reply)
+            self._rules.append(rules)
+
+            rules = MatchRules(
+                interface=defs.PROPERTIES_INTERFACE,
+                member="PropertiesChanged",
+                path_namespace=self._device_path,
+            )
+            reply = await add_match(self._bus, rules)
+            assert_reply(reply)
+            self._rules.append(rules)
+
+            # Find the HCI device to use for scanning and get cached device properties
+            reply = await self._bus.call(
+                Message(
+                    destination=defs.BLUEZ_SERVICE,
+                    path="/",
+                    member="GetManagedObjects",
+                    interface=defs.OBJECT_MANAGER_INTERFACE,
+                )
+            )
+            assert_reply(reply)
+
+            interfaces_and_props: Dict[str, Dict[str, Variant]] = reply.body[0]
+
+            # The device may have been removed from BlueZ since the time we stopped scanning
+            if self._device_path not in interfaces_and_props:
+                # Sometimes devices can be removed from the BlueZ object manager
+                # before we connect to them. In this case we try using the
+                # org.bluez.Adapter1.ConnectDevice method instead. This method
+                # requires that bluetoothd is run with the --experimental flag
+                # and is available since BlueZ 5.49.
+                logger.debug(
+                    f"org.bluez.Device1 object not found, trying org.bluez.Adapter1.ConnectDevice ({self._device_path})"
+                )
+                reply = await self._bus.call(
+                    Message(
+                        destination=defs.BLUEZ_SERVICE,
+                        interface=defs.ADAPTER_INTERFACE,
+                        path=f"/org/bluez/{self._adapter}",
+                        member="ConnectDevice",
+                        signature="a{sv}",
+                        body=[
+                            {
+                                "Address": Variant(
+                                    "s", self._device_info["Address"]
+                                ),
+                                "AddressType": Variant(
+                                    "s", self._device_info["AddressType"]
+                                ),
+                            }
+                        ],
+                    )
+                )
+
+                if (
+                    reply.message_type == MessageType.ERROR
+                    and reply.error_name == ErrorType.UNKNOWN_METHOD.value
+                ):
+                    logger.debug(
+                        f"org.bluez.Adapter1.ConnectDevice not found ({self._device_path}), try enabling + bluetoothd --experimental"
+                    )
+                    raise BleakError(
+                        "Device with address {0} could not be found. "
+                        "Try increasing the timeout or moving the device closer.".format(
+                            self.address
+                        )
+                    )
+
+                assert_reply(reply)
+            else:
+                # required interface
+                self._properties = de_variate(
+                    interfaces_and_props[self._device_path][defs.DEVICE_INTERFACE]
+                )
+
+                # optional interfaces - services and characteristics may not
+                # be populated yet
+                for path, interfaces in interfaces_and_props.items():
+                    if not path.startswith(self._device_path):
+                        continue
+
+                    if defs.GATT_SERVICE_INTERFACE in interfaces:
+                        obj = de_variate(interfaces[defs.GATT_SERVICE_INTERFACE])
+                        self.services.add_service(BleakGATTService(obj, path))
+
+                    if defs.GATT_CHARACTERISTIC_INTERFACE in interfaces:
+                        obj = de_variate(
+                            interfaces[defs.GATT_CHARACTERISTIC_INTERFACE]
+                        )
+                        service = interfaces_and_props[obj["Service"]][
+                            defs.GATT_SERVICE_INTERFACE
+                        ]
+                        uuid = service["UUID"].value
+                        self.services.add_characteristic(
+                            BleakGATTCharacteristic(obj, path, uuid)
+                        )
+
+                    if defs.GATT_DESCRIPTOR_INTERFACE in interfaces:
+                        obj = de_variate(
+                            interfaces[defs.GATT_DESCRIPTOR_INTERFACE]
+                        )
+                        characteristic = interfaces_and_props[obj["Characteristic"]][
+                            defs.GATT_CHARACTERISTIC_INTERFACE
+                        ]
+                        uuid = characteristic["UUID"].value
+                        handle = int(obj["Characteristic"][-4:], 16)
+                        self.services.add_descriptor(
+                            BleakGATTDescriptor(obj, path, uuid, handle)
+                        )
 
             logger.debug(
                 "Connecting to BLE device @ {0} with {1}".format(
@@ -145,44 +279,28 @@ class BleakClient(BaseBleakClient):
                     "Connect",
                     interface=defs.DEVICE_INTERFACE,
                     destination=defs.BLUEZ_SERVICE,
-                    timeout=timeout,
                 )
-            except RemoteError as e:
-                await self._cleanup_all()
-                if 'Method "Connect" with signature "" on interface' in str(e):
-                    raise BleakError(
-                        "Device with address {0} could not be found. "
-                        "Try increasing `timeout` value or moving the device closer.".format(
-                            self.address
-                        )
-                    )
-                else:
-                    raise BleakError(str(e))
+            except BaseException:
+                # calling Disconnect cancels any pending connect request
+                with anyio.move_on_after(2, shield=True):
+                    await self._call_disconnect()
+                raise
 
-            if await self.is_connected():
+            if self.is_connected:
                 logger.debug("Connection successful.")
             else:
-                await self._cleanup_all()
                 raise BleakError(
                     "Connection to {0} was not successful!".format(self.address)
                 )
 
             # Get all services. This means making the actual connection.
             await self.get_services()
-            properties = await self._get_device_properties()
-            if not properties.get("Connected"):
-                await self._cleanup_all()
-                raise BleakError("Connection failed!")
-
-            await self._bus.delMatch(rule_id)
-            self._rules["PropChanged"] = await signals.listen_properties_changed(
-                self._bus, self._properties_changed_callback
-            )
 
             try:
                 yield self
             finally:
-                await self.disconnect()
+                with anyio.move_on_after(2, shield=True):
+                    await self.disconnect()
 
     async def _cleanup_notifications(self) -> None:
         """
@@ -210,22 +328,6 @@ class BleakClient(BaseBleakClient):
                 )
         self._subscriptions = []
 
-    async def _cleanup_dbus_resources(self) -> None:
-        """
-        Free the resources allocated for both the DBus bus and the Twisted
-        reactor. Use this method upon final disconnection.
-        """
-        # Try to disconnect the System Bus.
-        try:
-            self._bus.disconnect()
-        except Exception as e:
-            logger.error("Attempt to disconnect system bus failed: {0}".format(e))
-        else:
-            # Critical to remove the `self._bus` object here to since it was
-            # closed above. If not, calls made to it later could lead to
-            # a stuck client.
-            self._bus = None
-
     async def _cleanup_all(self) -> None:
         """
         Free all the allocated resource in DBus and Twisted. Use this method to
@@ -233,7 +335,6 @@ class BleakClient(BaseBleakClient):
         """
         self._char_path_to_handle.clear()
         await self._cleanup_notifications()
-        await self._cleanup_dbus_resources()
 
     async def cleanup_all_and_cb(self) -> None:
         await self._cleanup_all()
@@ -252,7 +353,7 @@ class BleakClient(BaseBleakClient):
             Boolean representing if device is disconnected.
 
         """
-        logger.debug("Disconnecting from BLE device...")
+        logger.debug("Disconnecting (%s)", self._device_path)
         if self._bus is None:
             # No connection exists. Either one hasn't been created or
             # we have already called disconnect and closed the txdbus
@@ -262,7 +363,22 @@ class BleakClient(BaseBleakClient):
         # Remove all residual notifications.
         await self._cleanup_notifications()
 
-        # Try to disconnect the actual device/peripheral
+        if self.is_connected:
+            # Try to disconnect the actual device/peripheral
+            await self._call_disconnect()
+
+        # Reset all stored services.
+        self.services = BleakGATTServiceCollection()
+        self._services_resolved = False
+        self._bus = None
+
+    async def _call_disconnect(self):
+        import pdb;pdb.set_trace()
+        if self._disconnect_monitor_event is None:
+            self._disconnect_monitor_event = evt = anyio.create_event()
+        else:
+            evt = self._disconnect_monitor_event
+
         try:
             await self._callRemote(
                 self._device_path,
@@ -270,17 +386,9 @@ class BleakClient(BaseBleakClient):
                 interface=defs.DEVICE_INTERFACE,
                 destination=defs.BLUEZ_SERVICE,
             )
+            await evt.wait()
         except Exception as e:
             logger.error("Attempt to disconnect device failed: {0}".format(e))
-
-        is_disconnected = not await self.is_connected()
-
-        await self._cleanup_dbus_resources()
-
-        # Reset all stored services.
-        self.services = BleakGATTServiceCollection()
-        self._services_resolved = False
-        return is_disconnected
 
     async def pair(self, *args, **kwargs) -> bool:
         """Pair with the peripheral.
@@ -354,35 +462,18 @@ class BleakClient(BaseBleakClient):
         )
         return False
 
-    async def is_connected(self) -> bool:
+    @property
+    def is_connected(self) -> bool:
         """Check connection status between this client and the server.
-
+                
         Returns:
             Boolean representing connection status.
-
+                    
         """
-        # TODO: Listen to connected property changes.
-        is_connected = False
-        try:
-            is_connected = await self._callRemote(
-                self._device_path,
-                "Get",
-                interface=defs.PROPERTIES_INTERFACE,
-                destination=defs.BLUEZ_SERVICE,
-                signature="ss",
-                body=[defs.DEVICE_INTERFACE, "Connected"],
-                returnSignature="v",
-            )
-        except AttributeError:
-            # The `self._bus` object had already been cleaned up due to disconnect...
-            pass
-        except ConnectionDone:
-            # Twisted error stating that "Connection was closed cleanly."
-            pass
-        except RemoteError as e:
-            if e.errName != "org.freedesktop.DBus.Error.UnknownObject":
-                raise
-        return is_connected
+        if not self._bus:
+            return False
+                        
+        return self._properties.get("Connected", False)
 
     # GATT services methods
 
@@ -396,7 +487,8 @@ class BleakClient(BaseBleakClient):
         if self._services_resolved:
             return self.services
 
-        sleep_loop_sec = 0.02
+        self._services_resolved_event = anyio.create_event()
+        sleep_loop_sec = 0.1
         total_slept_sec = 0
         services_resolved = False
 
@@ -405,7 +497,8 @@ class BleakClient(BaseBleakClient):
             services_resolved = properties.get("ServicesResolved", False)
             if services_resolved:
                 break
-            await anyio.sleep(sleep_loop_sec)
+            with anyio.move_on_after(sleep_loop_sec):
+                await self._services_resolved_event.wait()
             total_slept_sec += sleep_loop_sec
 
         if not services_resolved:
@@ -692,33 +785,27 @@ class BleakClient(BaseBleakClient):
 
     async def start_notify(
         self,
-        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, UUID],
         callback: Callable[[int, bytearray], None],
-        **kwargs
+        **kwargs,
     ) -> None:
         """Activate notifications/indications on a characteristic.
 
-        Callbacks must accept two inputs. The first will be a integer handle of the characteristic generating the
+        Callbacks must accept two inputs. The first will be a integer handle of the characteristic       + generating the
         data and the second will be a ``bytearray`` containing the data sent from the connected server.
-
+                        
         .. code-block:: python
-
+                         
             def callback(sender: int, data: bytearray):
                 print(f"{sender}: {data}")
             client.start_notify(char_uuid, callback)
-
+                         
         Args:
-            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to activate
+            char_specifier (BleakGATTCharacteristic, int, str or UUID): The characteristic to   + activate
                 notifications/indications on a characteristic, specified by either integer handle,
-                UUID or directly by the BleakGATTCharacteristic object representing it.
+                UUID or directly by the BleakGATTCharacteristicobject representing it.
             callback (function): The function to be called on notification.
-
-        Keyword Args:
-            notification_wrapper (bool): Set to `False` to avoid parsing of
-                notification to bytearray.
-
         """
-        _wrap = kwargs.get("notification_wrapper", True)
         if not isinstance(char_specifier, BleakGATTCharacteristic):
             characteristic = self.services.get_characteristic(char_specifier)
         else:
@@ -731,7 +818,7 @@ class BleakClient(BaseBleakClient):
             # provide this functionality...
             # See https://kernel.googlesource.com/pub/scm/bluetooth/bluez/+/refs/tags/5.48/doc/battery-api.txt
             if str(char_specifier) == "00002a19-0000-1000-8000-00805f9b34fb" and (
-                self._bluez_version[0] == 5 and self._bluez_version[1] >= 48
+                self._hides_battery_characteristic
             ):
                 raise BleakError(
                     "Notifications on Battery Level Char ({0}) is not "
@@ -745,34 +832,22 @@ class BleakClient(BaseBleakClient):
                 )
             )
 
-        if _wrap:
-            self._notification_callbacks[
-                characteristic.path
-            ] = _data_notification_wrapper(
-                callback, self._char_path_to_handle
-            )  # noqa | E123 error in flake8...
-        else:
-            self._notification_callbacks[
-                characteristic.path
-            ] = _regular_notification_wrapper(
-                callback, self._char_path_to_handle
-            )  # noqa | E123 error in flake8...
-
+        self._notification_callbacks[characteristic.path] = callback
         self._subscriptions.append(characteristic.handle)
 
-        await self._callRemote(
-            characteristic.path,
-            "StartNotify",
-            interface=defs.GATT_CHARACTERISTIC_INTERFACE,
-            destination=defs.BLUEZ_SERVICE,
-            signature="",
-            body=[],
-            returnSignature="",
+        reply = await self._bus.call(
+            Message(
+                destination=defs.BLUEZ_SERVICE,
+                path=characteristic.path,
+                interface=defs.GATT_CHARACTERISTIC_INTERFACE,
+                member="StartNotify",
+            )
         )
+        assert_reply(reply)
 
     async def stop_notify(
         self,
-        char_specifier: Union[BleakGATTCharacteristic, int, str, uuid.UUID],
+        char_specifier: Union[BleakGATTCharacteristic, int, str, UUID],
     ) -> None:
         """Deactivate notification/indication on a specified characteristic.
 
@@ -789,18 +864,20 @@ class BleakClient(BaseBleakClient):
         if not characteristic:
             raise BleakError("Characteristic {} not found!".format(char_specifier))
 
-        await self._callRemote(
-            characteristic.path,
-            "StopNotify",
-            interface=defs.GATT_CHARACTERISTIC_INTERFACE,
-            destination=defs.BLUEZ_SERVICE,
-            signature="",
-            body=[],
-            returnSignature="",
+        reply = await self._bus.call(
+            Message(
+                destination=defs.BLUEZ_SERVICE,
+                path=characteristic.path,
+                interface=defs.GATT_CHARACTERISTIC_INTERFACE,
+                member="StopNotify",
+            )
         )
+        assert_reply(reply)
+
         self._notification_callbacks.pop(characteristic.path, None)
 
         self._subscriptions.remove(characteristic.handle)
+
 
     # DBUS introspection method for characteristics.
 
@@ -860,57 +937,84 @@ class BleakClient(BaseBleakClient):
         )
 
     async def _callRemote(self, path, method, *, returnSignature="", **kwargs):
-        msg = Message(path=path, method=method, **kwargs)
-        res = await self._bus.call(msg)
-        if res.signature != returnSignature:
-            raise RuntimeError("Res %r: want %s" % (res, returnSignature))
+        msg = Message(path=path, member=method, **kwargs)
+        try:
+            res = await self._bus.call(msg)
+            if res.signature != returnSignature:
+                raise RuntimeError("Res %r: want %s" % (res, returnSignature))
+        except Exception as exc:
+            breakpoint()
+            raise
         return res.body
 
     # Internal Callbacks
 
-    def _properties_changed_callback(self, message):
-        """Notification handler.
-
-        In the BlueZ DBus API, notifications come as
-        PropertiesChanged callbacks on the GATT Characteristic interface
-        that StartNotify has been called on.
-
-        Args:
-            message (): The PropertiesChanged DBus signal message relaying
-                the new data on the GATT Characteristic.
-
-        """
+    def _parse_msg(self, message: Message):
+        if message.message_type != MessageType.SIGNAL:
+            return
 
         logger.debug(
-            "DBUS: path: {}, domain: {}, body: {}".format(
-                message.path, message.body[0], message.body[1]
+            "received D-Bus signal: {0}.{1} ({2}): {3}".format(
+                message.interface, message.member, message.path, message.body
             )
         )
+                    
+        if message.member == "InterfacesAdded":
+            path, interfaces = message.body
+                         
+            if defs.GATT_SERVICE_INTERFACE in interfaces:
+                obj = de_variate(interfaces[defs.GATT_SERVICE_INTERFACE])
+                # if this assert fails, it means our match rules are probably wrong
+                assert obj["Device"] == self._device_path
+                self.services.add_service(BleakGATTService(obj, path))
 
-        if message.body[0] == defs.GATT_CHARACTERISTIC_INTERFACE:
-            if message.path in self._notification_callbacks:
-                logger.debug(
-                    "GATT Char Properties Changed: {0} | {1}".format(
-                        message.path, message.body[1:]
-                    )
+            if defs.GATT_CHARACTERISTIC_INTERFACE in interfaces:
+                obj = de_variate(interfaces[defs.GATT_CHARACTERISTIC_INTERFACE])
+                service = next(
+                    x
+                    for x in self.services.services.values()
+                    if x.path == obj["Service"]
                 )
-                self._notification_callbacks[message.path](
-                    message.path, message.body[1]
+                self.services.add_characteristic(
+                    BleakGATTCharacteristic(obj, path, service.uuid)
                 )
-        elif message.body[0] == defs.DEVICE_INTERFACE:
-            device_path = "/org/bluez/%s/dev_%s" % (
-                self._adapter,
-                self.address.replace(":", "_"),
-            )
-            if message.path.lower() == device_path.lower():
-                message_body_map = message.body[1]
-                if (
-                    "Connected" in message_body_map
-                    and not message_body_map["Connected"]
-                ):
-                    logger.debug("Device {} disconnected.".format(self.address))
 
-                    self._tg.spawn(self._cleanup_all_and_cb)
+            if defs.GATT_DESCRIPTOR_INTERFACE in interfaces:
+                obj = de_variate(interfaces[defs.GATT_DESCRIPTOR_INTERFACE])
+                handle = int(obj["Characteristic"][-4:], 16)
+                characteristic = self.services.characteristics[handle]
+                self.services.add_descriptor(
+                    BleakGATTDescriptor(obj, path, characteristic.uuid, handle)
+                )
+        elif message.member == "InterfacesRemoved":
+            path, interfaces = message.body
+
+        elif message.member == "PropertiesChanged":
+            interface, changed, _ = message.body
+            changed = de_variate(changed)
+
+            if interface == defs.GATT_CHARACTERISTIC_INTERFACE:
+                if message.path in self._notification_callbacks and "Value" in changed:
+                    handle = int(message.path[-4:], 16)
+                    self._notification_callbacks[message.path](handle, changed["Value"])
+            elif interface == defs.DEVICE_INTERFACE:
+                self._properties.update(changed)
+
+                if "ServicesResolved" in changed:
+                    if changed["ServicesResolved"]:
+                        if self._services_resolved_event:
+                            self._services_resolved_event.set()
+                    else:
+                        self._services_resolved = False
+
+                if "Connected" in changed and not changed["Connected"]:
+                    logger.debug(f"Device disconnected ({self._device_path})")
+
+                    if self._disconnect_monitor_event:
+                        self._disconnect_monitor_event.set()
+                        self._disconnect_monitor_event = None
+                    else:
+                        raise BleakError(f"Device disconnected ({self._device_path})")
 
 
 def _data_notification_wrapper(func, char_map):
