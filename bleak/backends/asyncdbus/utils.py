@@ -45,7 +45,7 @@ def format_GATT_object(object_path, interfaces):
         return None
 
     _uuid = props.get("UUID")
-    return "\n{0}\n\t{1}\n\t{2}\n\t{3}".format(
+    return "{0}\n\t{1}\n\t{2}\n\t{3}".format(
         _type, object_path, _uuid, uuidstr_to_str(_uuid)
     )
 
