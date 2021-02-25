@@ -269,7 +269,7 @@ class BleakScanner(BaseBleakScanner):
             message.member == "InterfacesRemoved"
             and message.body[1][0] == defs.BATTERY_INTERFACE
         ):
-            logger.debug(
+            if False: logger.debug(
                 "{0}, {1} ({2}): {3}".format(
                     message.member, message.interface, message.path, pformat(message.body)
                 )
@@ -277,13 +277,13 @@ class BleakScanner(BaseBleakScanner):
             return
         else:
             msg_path = message.path
-            logger.debug(
+            if False: logger.debug(
                 "{0}, {1} ({2}): {3}".format(
                     message.member, message.interface, message.path, pformat(message.body)
                 )
             )
 
-        logger.debug(
+        if False: logger.debug(
             "{0}, {1} ({2} dBm), Object Path: {3}".format(
                 *_device_info(msg_path, self._devices.get(msg_path))
             )
