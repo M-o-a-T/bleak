@@ -7,6 +7,12 @@ class BleakError(Exception):
     pass
 
 
+class BleakDisconnectError(BleakError):
+    """The device disconnected unexpectedly."""
+
+    pass
+
+
 class BleakDotNetTaskError(BleakError):
     """Wrapped exception that occurred in .NET async Task."""
 

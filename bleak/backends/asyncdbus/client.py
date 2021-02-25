@@ -20,7 +20,7 @@ from asyncdbus import MessageBus, BusType, Message, MessageType
 
 from ..device import BLEDevice
 from ..service import BleakGATTServiceCollection
-from ...exc import BleakError
+from ...exc import BleakError, BleakDisconnectError
 from ..client import BaseBleakClient
 from . import defs, utils
 from .scanner import BleakScanner
@@ -91,6 +91,9 @@ class BleakClient(BaseBleakClient):
         # used to ensure device gets disconnected if event loop crashes
         self._disconnect_monitor_event: anyio.abc.Event = None
 
+        # flags that _get_services() has completed
+        # is a bool in superclass but we can't have that
+        self._services_resolved: anyio.abc.Event = anyio.create_event()
 
         # We need to know BlueZ version since battery level characteristic
         # are stored in a separate DBus interface in the BlueZ >= 5.48.
@@ -139,6 +142,7 @@ class BleakClient(BaseBleakClient):
 
         # Connect to system bus
         async with MessageBus(bus_type=BusType.SYSTEM).connect() as self._bus:
+            self._tg = self._bus._tg  # XXX oh well
 
             self._bus.add_message_handler(self._parse_msg)
 
@@ -293,8 +297,8 @@ class BleakClient(BaseBleakClient):
                     "Connection to {0} was not successful!".format(self.address)
                 )
 
-            # Get all services. This means making the actual connection.
-            await self.get_services()
+            # Get all services.
+            await self._get_services()
 
             try:
                 yield self
@@ -368,7 +372,7 @@ class BleakClient(BaseBleakClient):
 
         # Reset all stored services.
         self.services = BleakGATTServiceCollection()
-        self._services_resolved = False
+        self._services_resolved = anyio.create_event()
         self._bus = None
 
     async def _call_disconnect(self):
@@ -482,29 +486,34 @@ class BleakClient(BaseBleakClient):
            A :py:class:`bleak.backends.service.BleakGATTServiceCollection` with this device's services tree.
 
         """
-        if self._services_resolved:
-            return self.services
+        await self._services_resolved.wait()
+        return self.services
 
+    async def _get_services(self, **kwargs) -> None:
         self._services_resolved_event = anyio.create_event()
-        sleep_loop_sec = 0.1
+        sleep_loop_sec = 1
         total_slept_sec = 0
         services_resolved = False
 
-        while total_slept_sec < 5.0:
-            properties = await self._get_device_properties()
+        with anyio.fail_after(5):
+            while True:
+                logger.debug("Wait for Services...")
+                properties = await self._get_device_properties()
 
-            services_resolved = properties.get("ServicesResolved", False)
-            if services_resolved:
-                break
-            with anyio.move_on_after(sleep_loop_sec):
-                await self._services_resolved_event.wait()
-            total_slept_sec += sleep_loop_sec
+                services_resolved = properties.get("ServicesResolved", False)
+                if not services_resolved:
+                    with anyio.move_on_after(sleep_loop_sec):
+                        await self._services_resolved_event.wait()
+                    continue
 
-        if not services_resolved:
-            raise BleakError("Services discovery error")
+                logger.debug("Get Services...")
+                objs = await get_managed_objects(self._bus, self._device_path + "/service")
 
-        logger.debug("Get Services...")
-        objs = await get_managed_objects(self._bus, self._device_path + "/service")
+                # Sometimes Bluez reports having resolved services without
+                # a subsequent `get_managed_objects` actually sending us any.
+                if objs:
+                    break
+                self._services_resolved_event = anyio.create_event()
 
         # There is no guarantee that services are listed before characteristics
         # Managed Objects dict.
@@ -513,18 +522,22 @@ class BleakClient(BaseBleakClient):
         _chars, _descs = [], []
 
         for object_path, interfaces in objs.items():
-            logger.debug(utils.format_GATT_object(object_path, interfaces))
             if defs.GATT_SERVICE_INTERFACE in interfaces:
+                logger.debug("GATT service: %s", utils.format_GATT_object(object_path, interfaces))
                 service = interfaces.get(defs.GATT_SERVICE_INTERFACE)
                 self.services.add_service(
                     BleakGATTService(service, object_path)
                 )
             elif defs.GATT_CHARACTERISTIC_INTERFACE in interfaces:
+                logger.debug("GATT char: %s", utils.format_GATT_object(object_path, interfaces))
                 char = interfaces.get(defs.GATT_CHARACTERISTIC_INTERFACE)
                 _chars.append([char, object_path])
             elif defs.GATT_DESCRIPTOR_INTERFACE in interfaces:
+                logger.debug("GATT desc: %s", utils.format_GATT_object(object_path, interfaces))
                 desc = interfaces.get(defs.GATT_DESCRIPTOR_INTERFACE)
                 _descs.append([desc, object_path])
+            else:
+                logger.warn("Unknown: %s: %s", utils.format_GATT_object(object_path, interfaces), interfaces)
 
         for char, object_path in _chars:
             _service = list(filter(lambda x: x.path == char["Service"], self.services))
@@ -551,8 +564,7 @@ class BleakClient(BaseBleakClient):
                 )
             )
 
-        self._services_resolved = True
-        return self.services
+        self._services_resolved.set()
 
     # IO methods
 
@@ -937,13 +949,9 @@ class BleakClient(BaseBleakClient):
 
     async def _callRemote(self, path, method, *, returnSignature="", **kwargs):
         msg = Message(path=path, member=method, **kwargs)
-        try:
-            res = await self._bus.call(msg)
-            if res.signature != returnSignature:
-                raise RuntimeError("Res %r: want %s" % (res, returnSignature))
-        except Exception as exc:
-            breakpoint()
-            raise
+        res = await self._bus.call(msg)
+        if res.signature != returnSignature:
+            raise RuntimeError("Res %r: want %s" % (res, returnSignature))
 
         if isinstance(res.body,(tuple,list)) and len(res.body) == 1:
             return res.body[0]
@@ -951,7 +959,7 @@ class BleakClient(BaseBleakClient):
 
     # Internal Callbacks
 
-    def _parse_msg(self, message: Message):
+    async def _parse_msg(self, message: Message):
         if message.message_type != MessageType.SIGNAL:
             return
 
@@ -972,22 +980,30 @@ class BleakClient(BaseBleakClient):
 
             if defs.GATT_CHARACTERISTIC_INTERFACE in interfaces:
                 obj = de_variate(interfaces[defs.GATT_CHARACTERISTIC_INTERFACE])
-                service = next(
-                    x
-                    for x in self.services.services.values()
-                    if x.path == obj["Service"]
-                )
-                self.services.add_characteristic(
-                    BleakGATTCharacteristic(obj, path, service.uuid)
-                )
+                try:
+                    service = next(
+                        x
+                        for x in self.services.services.values()
+                        if x.path == obj["Service"]
+                    )
+                except StopIteration:
+                    pass
+                else:
+                    self.services.add_characteristic(
+                        BleakGATTCharacteristic(obj, path, service.uuid)
+                    )
 
             if defs.GATT_DESCRIPTOR_INTERFACE in interfaces:
                 obj = de_variate(interfaces[defs.GATT_DESCRIPTOR_INTERFACE])
                 handle = int(obj["Characteristic"][-4:], 16)
-                characteristic = self.services.characteristics[handle]
-                self.services.add_descriptor(
-                    BleakGATTDescriptor(obj, path, characteristic.uuid, handle)
-                )
+                try:
+                    characteristic = self.services.characteristics[handle]
+                except KeyError:
+                    pass # XXX
+                else:
+                    self.services.add_descriptor(
+                        BleakGATTDescriptor(obj, path, characteristic.uuid, handle)
+                    )
         elif message.member == "InterfacesRemoved":
             path, interfaces = message.body
 
@@ -998,16 +1014,21 @@ class BleakClient(BaseBleakClient):
             if interface == defs.GATT_CHARACTERISTIC_INTERFACE:
                 if message.path in self._notification_callbacks and "Value" in changed:
                     handle = int(message.path[-4:], 16)
-                    self._notification_callbacks[message.path](handle, changed["Value"])
+                    res = self._notification_callbacks[message.path](handle, changed["Value"])
+                    if inspect.iscoroutine(res):
+                        await res
             elif interface == defs.DEVICE_INTERFACE:
                 self._properties.update(changed)
 
                 if "ServicesResolved" in changed:
                     if changed["ServicesResolved"]:
+                        # Tell the resolver to continue working
                         if self._services_resolved_event:
                             self._services_resolved_event.set()
-                    else:
-                        self._services_resolved = False
+                    elif self._services_resolved.is_set():
+                        # Services are no longer resolved: re-fetch them.
+                        self._services_resolved = anyio.create_event()
+                        self._tg.spawn(self._get_services)
 
                 if "Connected" in changed and not changed["Connected"]:
                     logger.debug(f"Device disconnected ({self._device_path})")
@@ -1016,7 +1037,7 @@ class BleakClient(BaseBleakClient):
                         self._disconnect_monitor_event.set()
                         self._disconnect_monitor_event = None
                     else:
-                        raise BleakError(f"Device disconnected ({self._device_path})")
+                        raise BleakDisconnectError(self._device_path)
 
 
 def _data_notification_wrapper(func, char_map):
