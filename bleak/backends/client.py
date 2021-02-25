@@ -228,8 +228,8 @@ class BaseBleakClient(abc.ABC):
         async def enq(a:int, b:bytearray):
             q_w.send_nowait(b)
 
-        await self.start_notify(char_specifier, enq)
         q_w,q_r = anyio.create_memory_object_stream(10)
+        await self.start_notify(char_specifier, enq)
         try:
             yield q_r
         finally:
